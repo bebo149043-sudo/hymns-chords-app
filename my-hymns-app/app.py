@@ -18,104 +18,123 @@ except ImportError:
 # Set page config
 st.set_page_config(page_title="Hymn Library", layout="wide", initial_sidebar_state="expanded")
 
-# ==========================================
-# GORGEOUS HIGH-CONTRAST DARK MODE STYLING
-# ==========================================
+# =========================================================
+# VIBRANT MIDNIGHT SAPPHIRE & COLORFUL GRADIENT BUTTONS
+# =========================================================
 st.markdown("""
     <style>
-    /* Main body backdrop */
+    /* Main body backdrop - Deep Midnight Sapphire */
     .stApp {
-        background-color: #0b0c10 !important;
+        background-color: #0b101d !important;
         color: #f3f4f6 !important;
         font-family: 'Helvetica Neue', Arial, sans-serif !important;
     }
     
-    /* Sidebar structural framing */
+    /* Sidebar structural framing - Obsidian Blue */
     section[data-testid="stSidebar"] {
-        background-color: #12131a !important;
-        border-right: 1px solid #1f2230 !important;
+        background-color: #111625 !important;
+        border-right: 1px solid #1e2538 !important;
     }
     
-    /* Universal Button base design */
+    /* Typography color accents - Warm Gold for music headings */
+    h1, h2, h3, h4, .stSubheader {
+        color: #fbbf24 !important;
+        font-weight: 800 !important;
+    }
+    
+    /* ---------------- BUTTONS COLOR PALETTE ---------------- */
+    
+    /* Global base button transitions */
     button {
-        background-color: #1d202b !important;
-        color: #e5e7eb !important;
-        border: 1px solid #374151 !important;
         border-radius: 8px !important;
-        padding: 8px 16px !important;
-        font-weight: 700 !important;
+        padding: 10px 18px !important;
+        font-weight: 800 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.5px !important;
         transition: all 0.2s ease-in-out !important;
         cursor: pointer !important;
+        transform: scale(1) !important;
     }
     button:hover {
-        background-color: #2d3142 !important;
-        border-color: #9ca3af !important;
-        color: #ffffff !important;
+        transform: scale(1.02) !important;
     }
     
-    /* Primary / Action Buttons (Upload & View Text) */
+    /* Primary Buttons (Upload & Extract) - Vibrant Glowing Emerald Green */
     button[kind="primary"] {
-        background-color: #5850ec !important;
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
         color: #ffffff !important;
-        border: 1px solid #7f79f5 !important;
-        box-shadow: 0 2px 4px rgba(88, 80, 236, 0.2) !important;
+        border: none !important;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4) !important;
     }
     button[kind="primary"]:hover {
-        background-color: #4338ca !important;
-        border-color: #5850ec !important;
-        box-shadow: 0 0 10px rgba(88, 80, 236, 0.5) !important;
+        background: linear-gradient(135deg, #34d399 0%, #10b981 100%) !important;
+        box-shadow: 0 6px 18px rgba(16, 185, 129, 0.6) !important;
     }
 
-    /* Danger / Delete Buttons styling */
-    button[class*="Danger"] {
-        background-color: #dc2626 !important;
+    /* Secondary Buttons (Search, Clear, View text) - Glowing Royal Indigo */
+    button[kind="secondary"] {
+        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
         color: #ffffff !important;
-        border: 1px solid #ef4444 !important;
+        border: none !important;
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3) !important;
     }
-    button[class*="Danger"]:hover {
-        background-color: #b91c1c !important;
-        border-color: #dc2626 !important;
-        box-shadow: 0 0 10px rgba(220, 38, 38, 0.5) !important;
+    button[kind="secondary"]:hover {
+        background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%) !important;
+        box-shadow: 0 6px 18px rgba(99, 102, 241, 0.5) !important;
     }
 
-    /* Custom Input fields */
+    /* Danger / Delete Wrapper - Vivid Crimson Red */
+    .danger-btn-wrapper button {
+        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4) !important;
+    }
+    .danger-btn-wrapper button:hover {
+        background: linear-gradient(135deg, #f87171 0%, #ef4444 100%) !important;
+        box-shadow: 0 6px 18px rgba(239, 68, 68, 0.6) !important;
+    }
+
+    /* ---------------- INPUTS & SELECTORS ---------------- */
+    
+    /* Custom input boxes */
     div[data-testid="stTextInput"] input {
-        background-color: #191b26 !important;
+        background-color: #161c2a !important;
         color: #ffffff !important;
-        border: 1px solid #2d3142 !important;
+        border: 1px solid #2d364f !important;
         border-radius: 8px !important;
         padding: 10px !important;
         font-size: 15px !important;
     }
     div[data-testid="stTextInput"] input:focus {
-        border-color: #5850ec !important;
-        box-shadow: 0 0 8px rgba(88, 80, 236, 0.4) !important;
+        border-color: #6366f1 !important;
+        box-shadow: 0 0 10px rgba(99, 102, 241, 0.4) !important;
     }
 
     /* Styled Expander Panels (View Lyrics) */
     div[data-testid="stExpander"] {
-        background-color: #12131a !important;
-        border: 1px solid #1f2230 !important;
+        background-color: #111625 !important;
+        border: 1px solid #1e2538 !important;
         border-radius: 8px !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
     }
 
-    /* Radio selection list values (Song index) */
+    /* Listbox Radio selectors (Index values) */
     div[data-testid="stRadio"] label {
-        color: #d1d5db !important;
+        color: #e2e8f0 !important;
         font-size: 15px !important;
-        font-weight: 600 !important;
+        font-weight: 700 !important;
     }
 
-    /* Interactive Menu Tabs */
+    /* Web Workspace Menu Tabs */
     button[data-baseweb="tab"] {
-        color: #9ca3af !important;
+        color: #94a3b8 !important;
         font-size: 15px !important;
         font-weight: 700 !important;
     }
     button[data-baseweb="tab"][aria-selected="true"] {
-        color: #818cf8 !important;
-        border-bottom-color: #5850ec !important;
+        color: #fbbf24 !important;
+        border-bottom-color: #fbbf24 !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -147,14 +166,12 @@ if PYTESSERACT_AVAILABLE:
 
 # ----------------- GITHUB AUTO-SYNC LOGIC -----------------
 def upload_to_github(token, repo, file_path, content_bytes, commit_message):
-    """Commits and pushes a file directly to the GitHub repository via REST API."""
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json"
     }
     
-    # Check if file exists to get its unique SHA key
     sha = None
     r = requests.get(url, headers=headers)
     if r.status_code == 200:
@@ -172,7 +189,6 @@ def upload_to_github(token, repo, file_path, content_bytes, commit_message):
     return response.status_code in [200, 201]
 
 def delete_from_github(token, repo, file_path, commit_message):
-    """Deletes a file directly from the GitHub repository via REST API."""
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
     headers = {
         "Authorization": f"token {token}",
@@ -192,10 +208,8 @@ def detect_title_from_text(extracted_text, fallback_name):
     """Filters out chords and song numbers to extract the actual hymn title."""
     lines = [line.strip() for line in extracted_text.split('\n') if line.strip()]
     for line in lines:
-        # Skip pure numeric lines
         if line.isdigit():
             continue
-        # Skip pure chord lines (e.g. "Am F C G")
         chord_chars = set("abcdefg#m7susadd/123456789 ")
         if set(line.lower()).issubset(chord_chars) and len(line) < 15:
             continue
@@ -205,13 +219,11 @@ def detect_title_from_text(extracted_text, fallback_name):
             detected = detected[:47] + "..."
         return detected
         
-    # Fallback to cleaned filename
     base_name = os.path.splitext(fallback_name)[0]
     return base_name.replace('_', ' ').replace('-', ' ').strip().title()
 
 # ----------------- DATABASE UTILITIES -----------------
 def get_db_connection():
-    """Establishes connection and ensures the table exists to prevent OperationalErrors."""
     conn = sqlite3.connect(DB_NAME, timeout=30.0)
     cursor = conn.cursor()
     cursor.execute('''
@@ -245,7 +257,6 @@ def get_hymns(search_query=""):
         return []
 
 def get_image_path(image_path):
-    """Locates the image on the server, fallback to /tmp if not yet synced with Git."""
     if os.path.exists(image_path):
         return image_path
     filename = os.path.basename(image_path)
@@ -503,7 +514,9 @@ with tab_manage:
         
         to_delete = st.multiselect("Select hymns to delete:", options=list(hymn_map.keys()))
         
-        if st.button("🗑️ Delete Selected Hymns", type="secondary", class_="Danger"):
+        # Wrapped in custom danger container to force red styling
+        st.markdown("<div class='danger-btn-wrapper'>", unsafe_allow_html=True)
+        if st.button("🗑️ Delete Selected Hymns", type="secondary"):
             if not to_delete:
                 st.warning("Please select at least one hymn to delete.")
             else:
@@ -552,5 +565,6 @@ with tab_manage:
                         st.warning(f"Deleted {deleted_count} hymns locally. Changes will be lost when the server restarts.")
                         st.cache_data.clear()
                         st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
     else:
         st.info("No hymns in the library to manage.")
