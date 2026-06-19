@@ -18,18 +18,105 @@ except ImportError:
 # Set page config
 st.set_page_config(page_title="Hymn Library", layout="wide", initial_sidebar_state="expanded")
 
-# Custom Dark Mode styling
+# ==========================================
+# GORGEOUS HIGH-CONTRAST DARK MODE STYLING
+# ==========================================
 st.markdown("""
     <style>
+    /* Main body backdrop */
     .stApp {
-        background-color: #12131a;
-        color: #f3f4f6;
+        background-color: #0b0c10 !important;
+        color: #f3f4f6 !important;
+        font-family: 'Helvetica Neue', Arial, sans-serif !important;
     }
-    div[data-testid="stSidebar"] {
-        background-color: #1a1b23;
+    
+    /* Sidebar structural framing */
+    section[data-testid="stSidebar"] {
+        background-color: #12131a !important;
+        border-right: 1px solid #1f2230 !important;
     }
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
+    
+    /* Universal Button base design */
+    button {
+        background-color: #1d202b !important;
+        color: #e5e7eb !important;
+        border: 1px solid #374151 !important;
+        border-radius: 8px !important;
+        padding: 8px 16px !important;
+        font-weight: 700 !important;
+        transition: all 0.2s ease-in-out !important;
+        cursor: pointer !important;
+    }
+    button:hover {
+        background-color: #2d3142 !important;
+        border-color: #9ca3af !important;
+        color: #ffffff !important;
+    }
+    
+    /* Primary / Action Buttons (Upload & View Text) */
+    button[kind="primary"] {
+        background-color: #5850ec !important;
+        color: #ffffff !important;
+        border: 1px solid #7f79f5 !important;
+        box-shadow: 0 2px 4px rgba(88, 80, 236, 0.2) !important;
+    }
+    button[kind="primary"]:hover {
+        background-color: #4338ca !important;
+        border-color: #5850ec !important;
+        box-shadow: 0 0 10px rgba(88, 80, 236, 0.5) !important;
+    }
+
+    /* Danger / Delete Buttons styling */
+    button[class*="Danger"] {
+        background-color: #dc2626 !important;
+        color: #ffffff !important;
+        border: 1px solid #ef4444 !important;
+    }
+    button[class*="Danger"]:hover {
+        background-color: #b91c1c !important;
+        border-color: #dc2626 !important;
+        box-shadow: 0 0 10px rgba(220, 38, 38, 0.5) !important;
+    }
+
+    /* Custom Input fields */
+    div[data-testid="stTextInput"] input {
+        background-color: #191b26 !important;
+        color: #ffffff !important;
+        border: 1px solid #2d3142 !important;
+        border-radius: 8px !important;
+        padding: 10px !important;
+        font-size: 15px !important;
+    }
+    div[data-testid="stTextInput"] input:focus {
+        border-color: #5850ec !important;
+        box-shadow: 0 0 8px rgba(88, 80, 236, 0.4) !important;
+    }
+
+    /* Styled Expander Panels (View Lyrics) */
+    div[data-testid="stExpander"] {
+        background-color: #12131a !important;
+        border: 1px solid #1f2230 !important;
+        border-radius: 8px !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2) !important;
+    }
+
+    /* Radio selection list values (Song index) */
+    div[data-testid="stRadio"] label {
+        color: #d1d5db !important;
+        font-size: 15px !important;
+        font-weight: 600 !important;
+    }
+
+    /* Interactive Menu Tabs */
+    button[data-baseweb="tab"] {
+        color: #9ca3af !important;
+        font-size: 15px !important;
+        font-weight: 700 !important;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        color: #818cf8 !important;
+        border-bottom-color: #5850ec !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -60,12 +147,14 @@ if PYTESSERACT_AVAILABLE:
 
 # ----------------- GITHUB AUTO-SYNC LOGIC -----------------
 def upload_to_github(token, repo, file_path, content_bytes, commit_message):
+    """Commits and pushes a file directly to the GitHub repository via REST API."""
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json"
     }
     
+    # Check if file exists to get its unique SHA key
     sha = None
     r = requests.get(url, headers=headers)
     if r.status_code == 200:
@@ -83,6 +172,7 @@ def upload_to_github(token, repo, file_path, content_bytes, commit_message):
     return response.status_code in [200, 201]
 
 def delete_from_github(token, repo, file_path, commit_message):
+    """Deletes a file directly from the GitHub repository via REST API."""
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
     headers = {
         "Authorization": f"token {token}",
@@ -102,7 +192,7 @@ def detect_title_from_text(extracted_text, fallback_name):
     """Filters out chords and song numbers to extract the actual hymn title."""
     lines = [line.strip() for line in extracted_text.split('\n') if line.strip()]
     for line in lines:
-        # Skip pure numeric lines (song/page numbers)
+        # Skip pure numeric lines
         if line.isdigit():
             continue
         # Skip pure chord lines (e.g. "Am F C G")
@@ -121,6 +211,7 @@ def detect_title_from_text(extracted_text, fallback_name):
 
 # ----------------- DATABASE UTILITIES -----------------
 def get_db_connection():
+    """Establishes connection and ensures the table exists to prevent OperationalErrors."""
     conn = sqlite3.connect(DB_NAME, timeout=30.0)
     cursor = conn.cursor()
     cursor.execute('''
@@ -154,6 +245,7 @@ def get_hymns(search_query=""):
         return []
 
 def get_image_path(image_path):
+    """Locates the image on the server, fallback to /tmp if not yet synced with Git."""
     if os.path.exists(image_path):
         return image_path
     filename = os.path.basename(image_path)
@@ -266,14 +358,17 @@ with tab_import:
                     git_image_path = f"stored_hymns/{unique_name}"
 
                     # Insert to DB
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        'INSERT INTO hymns (title, image_path, extracted_text) VALUES (?, ?, ?)', 
-                        (final_title, git_image_path, extracted_text)
-                    )
-                    conn.commit()
-                    conn.close()
+                    try:
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            'INSERT INTO hymns (title, image_path, extracted_text) VALUES (?, ?, ?)', 
+                            (final_title, git_image_path, extracted_text)
+                        )
+                        conn.commit()
+                        conn.close()
+                    except Exception as e:
+                        st.error(f"Failed to write to local database: {e}")
 
                     # Push to GitHub
                     if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
@@ -408,7 +503,7 @@ with tab_manage:
         
         to_delete = st.multiselect("Select hymns to delete:", options=list(hymn_map.keys()))
         
-        if st.button("🗑️ Delete Selected Hymns", type="primary"):
+        if st.button("🗑️ Delete Selected Hymns", type="secondary", class_="Danger"):
             if not to_delete:
                 st.warning("Please select at least one hymn to delete.")
             else:
@@ -434,7 +529,7 @@ with tab_manage:
                             try:
                                 delete_from_github(token, repo, image_path, f"Deleted hymn '{title}'")
                             except Exception:
-                                pass # Pass silently if image already deleted on remote
+                                pass 
                         
                         deleted_count += 1
                         
