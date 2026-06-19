@@ -206,24 +206,14 @@ def delete_from_github(token, repo, file_path, commit_message):
         }
         requests.delete(url, headers=headers, json=payload)
 
-# ----------------- INTELLECTUAL TITLE DETECTION -----------------
-def detect_title_from_text(extracted_text, fallback_name):
-    """Filters out chords and song numbers to extract the actual hymn title."""
-    lines = [line.strip() for line in extracted_text.split('\n') if line.strip()]
-    for line in lines:
-        if line.isdigit():
-            continue
-        chord_chars = set("abcdefg#m7susadd/123456789 ")
-        if set(line.lower()).issubset(chord_chars) and len(line) < 15:
-            continue
-        
-        detected = line
-        if len(detected) > 50:
-            detected = detected[:47] + "..."
-        return detected
-        
-    base_name = os.path.splitext(fallback_name)[0]
-    return base_name.replace('_', ' ').replace('-', ' ').strip().title()
+# ----------------- FILENAME TITLE PARSER -----------------
+def get_title_from_filename(filename):
+    """Generates a clean title directly from the original imported filename."""
+    base_name = os.path.splitext(filename)[0]
+    # Replace underscores and dashes with spaces, and strip trailing spaces
+    cleaned = base_name.replace('_', ' ').replace('-', ' ').strip()
+    # Title-case for English names; leaves Arabic text untouched
+    return cleaned.title()
 
 # ----------------- DATABASE UTILITIES -----------------
 def get_db_connection():
@@ -344,25 +334,25 @@ with tab_import:
         uploaded_file = st.file_uploader("Select Sheet Music Image", type=["jpg", "jpeg", "png", "bmp", "tiff"], key="single_file")
         
         if uploaded_file:
-            # 1. Background OCR to automatically detect title
-            with st.spinner("Analyzing image text..."):
-                image_bytes = uploaded_file.getvalue()
-                extracted_text = ""
-                if PYTESSERACT_AVAILABLE:
-                    try:
-                        img = Image.open(uploaded_file)
-                        extracted_text = pytesseract.image_to_string(img, lang='ara+eng')
-                    except Exception as e:
-                        st.error(f"OCR Error: {e}")
-                
-                # Auto-detect title from extracted text
-                detected_title = detect_title_from_text(extracted_text, uploaded_file.name)
+            # CHANGED: Title is now immediately generated from the filename
+            detected_title = get_title_from_filename(uploaded_file.name)
 
-            # 2. Allow user to view and modify the auto-detected title
-            final_title = st.text_input("Auto-Detected Title (Edit if needed):", value=detected_title)
+            # Allow user to view and modify the title
+            final_title = st.text_input("Hymn Title (العنوان):", value=detected_title)
 
             if st.button("Confirm and Upload", type="primary"):
-                with st.spinner("Processing Upload..."):
+                with st.spinner("Processing Upload and OCR..."):
+                    image_bytes = uploaded_file.getvalue()
+                    
+                    # Run Arabic OCR in background for indexing search text
+                    extracted_text = ""
+                    if PYTESSERACT_AVAILABLE:
+                        try:
+                            img = Image.open(uploaded_file)
+                            extracted_text = pytesseract.image_to_string(img, lang='ara+eng')
+                        except Exception as e:
+                            st.error(f"OCR Error: {e}")
+
                     # Save locally to /tmp
                     file_ext = os.path.splitext(uploaded_file.name)[1]
                     unique_name = f"{uuid.uuid4()}{file_ext}"
@@ -427,14 +417,14 @@ with tab_import:
                 conn = get_db_connection()
                 cursor = conn.cursor()
 
-                uploaded_images = [] # keep track of images to push to git
+                uploaded_images = [] 
                 
                 for idx, file in enumerate(uploaded_files):
                     status_txt.write(f"Processing [{idx+1}/{len(uploaded_files)}]: {file.name}")
                     
                     image_bytes = file.getvalue()
                     
-                    # Run OCR
+                    # Run OCR behind the scenes
                     extracted_text = ""
                     if PYTESSERACT_AVAILABLE:
                         try:
@@ -443,8 +433,8 @@ with tab_import:
                         except Exception:
                             pass
                     
-                    # Auto-detect title
-                    detected_title = detect_title_from_text(extracted_text, file.name)
+                    # CHANGED: Auto-detect title directly from filename structure for batch uploads
+                    detected_title = detect_title_from_text("", file.name)
                     
                     # Save locally
                     file_ext = os.path.splitext(file.name)[1]
@@ -570,5 +560,6 @@ with tab_manage:
                         st.warning(f"Deleted {deleted_count} hymns locally. Changes will be lost when the server restarts.")
                         st.cache_data.clear()
                         st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
     else:
         st.info("No hymns in the library to manage.")
