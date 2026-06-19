@@ -2,6 +2,7 @@ import os
 import sqlite3
 import uuid
 import base64
+import shutil
 import requests
 import streamlit as st
 from PIL import Image
@@ -31,12 +32,30 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-DB_NAME = "hymns_database.db"
-IMAGES_DIR = "stored_hymns"
+# ==========================================
+# WRITEABLE PATH WORKAROUND FOR CLOUD
+# ==========================================
+REPO_DB = "hymns_database.db"
+DB_NAME = "/tmp/hymns_database.db"  # Writeable path on Streamlit Cloud
 
-# Ensure image directory exists locally
-if not os.path.exists(IMAGES_DIR):
-    os.makedirs(IMAGES_DIR)
+# Copy database to writeable /tmp folder if it doesn't exist
+if os.path.exists(REPO_DB):
+    if not os.path.exists(DB_NAME):
+        shutil.copy(REPO_DB, DB_NAME)
+
+# ==========================================
+# AUTOMATIC MAC/WINDOWS PATH RESOLUTION
+# ==========================================
+if PYTESSERACT_AVAILABLE:
+    if platform.system() == "Darwin":  # macOS
+        mac_paths = [
+            "/opt/homebrew/bin/tesseract",
+            "/usr/local/bin/tesseract"
+        ]
+        for path in mac_paths:
+            if os.path.exists(path):
+                pytesseract.pytesseract.tesseract_cmd = path
+                break
 
 # ----------------- GITHUB AUTO-SYNC LOGIC -----------------
 def upload_to_github(token, repo, file_path, content_bytes, commit_message):
@@ -47,7 +66,7 @@ def upload_to_github(token, repo, file_path, content_bytes, commit_message):
         "Accept": "application/vnd.github.v3+json"
     }
     
-    # Check if file exists to get its unique SHA key (required for updating files in Git)
+    # Check if file exists to get its unique SHA key
     sha = None
     r = requests.get(url, headers=headers)
     if r.status_code == 200:
@@ -63,6 +82,22 @@ def upload_to_github(token, repo, file_path, content_bytes, commit_message):
         
     response = requests.put(url, headers=headers, json=payload)
     return response.status_code in [200, 201]
+
+def delete_from_github(token, repo, file_path, commit_message):
+    """Deletes a file directly from the GitHub repository via REST API."""
+    url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    r = requests.get(url, headers=headers)
+    if r.status_code == 200:
+        sha = r.json().get("sha")
+        payload = {
+            "message": commit_message,
+            "sha": sha
+        }
+        requests.delete(url, headers=headers, json=payload)
 
 # ----------------- DATABASE UTILITIES -----------------
 def get_hymns(search_query=""):
@@ -81,6 +116,19 @@ def get_hymns(search_query=""):
     results = cursor.fetchall()
     conn.close()
     return results
+
+def get_image_path(image_path):
+    """Locates the image on the server, fallback to /tmp if not yet synced with Git."""
+    if os.path.exists(image_path):
+        return image_path
+    
+    # If the file hasn't synced to Git yet, it will be in the writable /tmp directory
+    filename = os.path.basename(image_path)
+    tmp_path = os.path.join("/tmp", filename)
+    if os.path.exists(tmp_path):
+        return tmp_path
+        
+    return image_path
 
 # ----------------- SIDEBAR MENU (Left) -----------------
 st.sidebar.title("Hymn Search")
@@ -131,20 +179,23 @@ with st.sidebar.expander("➕ Upload New Hymn", expanded=False):
                     except Exception as e:
                         st.error(f"OCR failed on server: {e}")
                 
-                # 3. Generate local unique path and save temporarily on server disk
+                # 3. Save temporarily in writable /tmp directory on the server
                 file_ext = os.path.splitext(uploaded_file.name)[1]
                 unique_name = f"{uuid.uuid4()}{file_ext}"
-                local_image_path = os.path.join(IMAGES_DIR, unique_name)
+                temp_image_path = os.path.join("/tmp", unique_name)
                 
-                with open(local_image_path, "wb") as f:
+                with open(temp_image_path, "wb") as f:
                     f.write(image_bytes)
 
-                # 4. Insert record into local SQLite file
+                # The path we want to record in the DB (for long-term Git usage)
+                git_image_path = f"stored_hymns/{unique_name}"
+
+                # 4. Insert record into writeable SQLite database in /tmp
                 conn = sqlite3.connect(DB_NAME)
                 cursor = conn.cursor()
                 cursor.execute(
                     'INSERT INTO hymns (title, image_path, extracted_text) VALUES (?, ?, ?)', 
-                    (upload_title, local_image_path, extracted_text)
+                    (upload_title, git_image_path, extracted_text)
                 )
                 conn.commit()
                 conn.close()
@@ -155,17 +206,17 @@ with st.sidebar.expander("➕ Upload New Hymn", expanded=False):
                     repo = st.secrets["GITHUB_REPO"]
                     
                     with st.spinner("Uploading and Syncing to GitHub Repository..."):
-                        # Read updated SQLite binary bytes
+                        # Read updated SQLite binary bytes from /tmp
                         with open(DB_NAME, "rb") as f:
                             db_bytes = f.read()
                             
-                        # Commit image and SQLite database via API
-                        success_img = upload_to_github(token, repo, local_image_path, image_bytes, f"Uploaded sheet music for '{upload_title}'")
-                        success_db = upload_to_github(token, repo, DB_NAME, db_bytes, f"Updated database with entry '{upload_title}'")
+                        # Commit image to stored_hymns/ and commit database file
+                        success_img = upload_to_github(token, repo, git_image_path, image_bytes, f"Uploaded sheet music for '{upload_title}'")
+                        success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Updated database with entry '{upload_title}'")
                         
                         if success_img and success_db:
                             st.success(f"Success! '{upload_title}' has been uploaded and permanently saved to GitHub.")
-                            st.cache_data.clear() # Clear streamlit cache to reload lists
+                            st.cache_data.clear() 
                             st.rerun()
                         else:
                             st.error("Linked successfully to server, but failed to sync changes to GitHub. Verify your token permissions.")
@@ -182,10 +233,53 @@ if selected_hymn:
     hymn_id, title, image_path = selected_hymn
     st.subheader(title)
     
-    if os.path.exists(image_path):
-        st.image(image_path, use_container_width=True)
+    # 1. Sidebar option to Delete
+    if st.sidebar.button("🗑️ Delete Selected Hymn", type="secondary"):
+        if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+            token = st.secrets["GITHUB_TOKEN"]
+            repo = st.secrets["GITHUB_REPO"]
+            
+            with st.spinner("Deleting and Syncing with GitHub..."):
+                # Remove entry from DB
+                conn = sqlite3.connect(DB_NAME)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM hymns WHERE id = ?", (hymn_id,))
+                conn.commit()
+                conn.close()
+                
+                # Try to delete the physical image file on GitHub
+                try:
+                    delete_from_github(token, repo, image_path, f"Deleted hymn '{title}'")
+                except Exception:
+                    pass
+                
+                # Push updated SQLite database bytes back to Git
+                with open(DB_NAME, "rb") as f:
+                    db_bytes = f.read()
+                success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Deleted hymn '{title}' from DB")
+                
+                if success_db:
+                    st.success(f"'{title}' has been successfully deleted!")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("Failed to sync database deletion to GitHub.")
+        else:
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM hymns WHERE id = ?", (hymn_id,))
+            conn.commit()
+            conn.close()
+            st.warning("Deleted temporarily on the server. Change will be lost when the server restarts.")
+            st.cache_data.clear()
+            st.rerun()
+
+    # 2. Display Image
+    resolved_path = get_image_path(image_path)
+    if os.path.exists(resolved_path):
+        st.image(resolved_path, use_container_width=True)
     else:
-        st.error(f"Image file not found on server: {image_path}")
+        st.error(f"Image file not found on server: {resolved_path}")
 else:
     st.write("### Welcome to the Hymn Library")
     st.write("Select a hymn from the sidebar menu to begin playing.")
