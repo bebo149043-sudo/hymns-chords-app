@@ -334,7 +334,7 @@ with tab_import:
         uploaded_file = st.file_uploader("Select Sheet Music Image", type=["jpg", "jpeg", "png", "bmp", "tiff"], key="single_file")
         
         if uploaded_file:
-            # CHANGED: Title is now immediately generated from the filename
+            # Title is immediately generated from the filename
             detected_title = get_title_from_filename(uploaded_file.name)
 
             # Allow user to view and modify the title
@@ -433,8 +433,8 @@ with tab_import:
                         except Exception:
                             pass
                     
-                    # CHANGED: Auto-detect title directly from filename structure for batch uploads
-                    detected_title = detect_title_from_text("", file.name)
+                    # FIXED: Now calls get_title_from_filename to prevent NameError
+                    detected_title = get_title_from_filename(file.name)
                     
                     # Save locally
                     file_ext = os.path.splitext(file.name)[1]
