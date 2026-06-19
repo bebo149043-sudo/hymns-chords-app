@@ -60,14 +60,12 @@ if PYTESSERACT_AVAILABLE:
 
 # ----------------- GITHUB AUTO-SYNC LOGIC -----------------
 def upload_to_github(token, repo, file_path, content_bytes, commit_message):
-    """Commits and pushes a file directly to the GitHub repository via REST API."""
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
     headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github.v3+json"
     }
     
-    # Check if file exists to get its unique SHA key
     sha = None
     r = requests.get(url, headers=headers)
     if r.status_code == 200:
@@ -85,7 +83,6 @@ def upload_to_github(token, repo, file_path, content_bytes, commit_message):
     return response.status_code in [200, 201]
 
 def delete_from_github(token, repo, file_path, commit_message):
-    """Deletes a file directly from the GitHub repository via REST API."""
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
     headers = {
         "Authorization": f"token {token}",
@@ -100,9 +97,30 @@ def delete_from_github(token, repo, file_path, commit_message):
         }
         requests.delete(url, headers=headers, json=payload)
 
+# ----------------- INTELLECTUAL TITLE DETECTION -----------------
+def detect_title_from_text(extracted_text, fallback_name):
+    """Filters out chords and song numbers to extract the actual hymn title."""
+    lines = [line.strip() for line in extracted_text.split('\n') if line.strip()]
+    for line in lines:
+        # Skip pure numeric lines (song/page numbers)
+        if line.isdigit():
+            continue
+        # Skip pure chord lines (e.g. "Am F C G")
+        chord_chars = set("abcdefg#m7susadd/123456789 ")
+        if set(line.lower()).issubset(chord_chars) and len(line) < 15:
+            continue
+        
+        detected = line
+        if len(detected) > 50:
+            detected = detected[:47] + "..."
+        return detected
+        
+    # Fallback to cleaned filename
+    base_name = os.path.splitext(fallback_name)[0]
+    return base_name.replace('_', ' ').replace('-', ' ').strip().title()
+
 # ----------------- DATABASE UTILITIES -----------------
 def get_db_connection():
-    """Establishes connection and ensures the table exists to prevent OperationalErrors."""
     conn = sqlite3.connect(DB_NAME, timeout=30.0)
     cursor = conn.cursor()
     cursor.execute('''
@@ -136,177 +154,308 @@ def get_hymns(search_query=""):
         return []
 
 def get_image_path(image_path):
-    """Locates the image on the server, fallback to /tmp if not yet synced with Git."""
     if os.path.exists(image_path):
         return image_path
-    
-    # If the file hasn't synced to Git yet, it will be in the writable /tmp directory
     filename = os.path.basename(image_path)
     tmp_path = os.path.join("/tmp", filename)
     if os.path.exists(tmp_path):
         return tmp_path
-        
     return image_path
 
-# ----------------- SIDEBAR MENU (Left) -----------------
-st.sidebar.title("Hymn Search")
+# ==========================================
+# APP WORKSPACE TABS
+# ==========================================
+tab_view, tab_import, tab_manage = st.tabs(["📖 View & Search", "➕ Import Hymns", "🛠️ Manage Library"])
 
-search_term = st.sidebar.text_input(
-    "Search title or lyrics", 
-    placeholder="بحث العنوان أو الكلمات...", 
-    label_visibility="collapsed"
-)
+# ------------------------------------------
+# TAB 1: VIEW & SEARCH
+# ------------------------------------------
+with tab_view:
+    col_side, col_main = st.columns([1, 3])
 
-hymn_list = get_hymns(search_term)
-selected_hymn = None
+    with col_side:
+        st.subheader("Hymn Index")
+        view_search = st.text_input(
+            "Search titles or lyrics", 
+            placeholder="بحث العنوان أو الكلمات...", 
+            key="view_search_box"
+        )
+        
+        hymn_list = get_hymns(view_search)
+        selected_hymn = None
 
-if hymn_list:
-    titles = [row[1] for row in hymn_list]
-    selected_title = st.sidebar.radio(
-        f"Select a song ({len(titles)} found):",
-        options=titles,
-        label_visibility="collapsed"
-    )
-    selected_hymn = next(row for row in hymn_list if row[1] == selected_title)
-else:
-    st.sidebar.info("No hymns match your search.")
-
-# ----------------- UPLOAD NEW SONG EXPANDER -----------------
-with st.sidebar.expander("➕ Upload New Hymn", expanded=False):
-    st.write("Upload a sheet music photo to automatically run Arabic OCR and sync to your library.")
-    
-    upload_title = st.text_input("Hymn Title (العنوان)")
-    uploaded_file = st.file_uploader("Choose Sheet Music Photo", type=["jpg", "jpeg", "png", "bmp", "tiff"])
-    
-    if st.button("Extract & Upload"):
-        if not upload_title.strip():
-            st.error("Please enter a title.")
-        elif not uploaded_file:
-            st.error("Please select an image file.")
+        if hymn_list:
+            titles = [row[1] for row in hymn_list]
+            selected_title = st.radio(
+                f"Songs found ({len(titles)}):",
+                options=titles,
+                key="view_song_selector"
+            )
+            selected_hymn = next(row for row in hymn_list if row[1] == selected_title)
         else:
-            with st.spinner("Running Arabic/English OCR in the Cloud..."):
-                # 1. Read uploaded image bytes
-                image_bytes = uploaded_file.getvalue()
+            st.info("No hymns found.")
+
+    with col_main:
+        if selected_hymn:
+            hymn_id, title, image_path = selected_hymn
+            st.markdown(f"## {title}")
+            
+            # Display Image
+            resolved_path = get_image_path(image_path)
+            if os.path.exists(resolved_path):
+                st.image(resolved_path, use_container_width=True)
+            else:
+                st.error(f"Image not found on server: {resolved_path}")
+            
+            # View Extracted Text Expander
+            with st.expander("🔍 View Extracted Text (Lyrics & Chords)", expanded=False):
+                conn = get_db_connection()
+                row = conn.execute("SELECT extracted_text FROM hymns WHERE id=?", (hymn_id,)).fetchone()
+                conn.close()
+                text = row[0] if (row and row[0]) else ""
                 
-                # 2. Perform OCR directly on the Streamlit server
+                st.text_area(
+                    "Indexed OCR Text:", 
+                    value=text if text.strip() else "No text extracted from this hymn.",
+                    height=250,
+                    disabled=True
+                )
+        else:
+            st.write("### Welcome to the Hymn Library")
+            st.write("Select a hymn from the index on the left to display sheet music.")
+
+# ------------------------------------------
+# TAB 2: IMPORT HYMNS
+# ------------------------------------------
+with tab_import:
+    st.header("Import Hymns")
+    
+    import_mode = st.radio("Upload Mode:", ["Single Image Upload", "Multiple Images / Folder Upload"], horizontal=True)
+
+    if import_mode == "Single Image Upload":
+        uploaded_file = st.file_uploader("Select Sheet Music Image", type=["jpg", "jpeg", "png", "bmp", "tiff"], key="single_file")
+        
+        if uploaded_file:
+            # 1. Background OCR to automatically detect title
+            with st.spinner("Analyzing image text..."):
+                image_bytes = uploaded_file.getvalue()
                 extracted_text = ""
                 if PYTESSERACT_AVAILABLE:
                     try:
                         img = Image.open(uploaded_file)
                         extracted_text = pytesseract.image_to_string(img, lang='ara+eng')
                     except Exception as e:
-                        st.error(f"OCR failed on server: {e}")
+                        st.error(f"OCR Error: {e}")
                 
-                # 3. Save temporarily in writable /tmp directory on the server
-                file_ext = os.path.splitext(uploaded_file.name)[1]
-                unique_name = f"{uuid.uuid4()}{file_ext}"
-                temp_image_path = os.path.join("/tmp", unique_name)
-                
-                with open(temp_image_path, "wb") as f:
-                    f.write(image_bytes)
+                # Auto-detect title from extracted text
+                detected_title = detect_title_from_text(extracted_text, uploaded_file.name)
 
-                # The path we want to record in the DB (for long-term Git usage)
-                git_image_path = f"stored_hymns/{unique_name}"
+            # 2. Allow user to view and modify the auto-detected title
+            final_title = st.text_input("Auto-Detected Title (Edit if needed):", value=detected_title)
 
-                # 4. Insert record into writeable SQLite database in /tmp
-                try:
+            if st.button("Confirm and Upload", type="primary"):
+                with st.spinner("Processing Upload..."):
+                    # Save locally to /tmp
+                    file_ext = os.path.splitext(uploaded_file.name)[1]
+                    unique_name = f"{uuid.uuid4()}{file_ext}"
+                    temp_image_path = os.path.join("/tmp", unique_name)
+                    
+                    with open(temp_image_path, "wb") as f:
+                        f.write(image_bytes)
+
+                    git_image_path = f"stored_hymns/{unique_name}"
+
+                    # Insert to DB
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     cursor.execute(
                         'INSERT INTO hymns (title, image_path, extracted_text) VALUES (?, ?, ?)', 
-                        (upload_title, git_image_path, extracted_text)
+                        (final_title, git_image_path, extracted_text)
                     )
                     conn.commit()
                     conn.close()
-                except Exception as e:
-                    st.error(f"Failed to write to local database: {e}")
 
-                # 5. Sync files to GitHub Repository permanently
+                    # Push to GitHub
+                    if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+                        token = st.secrets["GITHUB_TOKEN"]
+                        repo = st.secrets["GITHUB_REPO"]
+                        
+                        with open(DB_NAME, "rb") as f:
+                            db_bytes = f.read()
+                        
+                        success_img = upload_to_github(token, repo, git_image_path, image_bytes, f"Uploaded '{final_title}'")
+                        success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Updated database with '{final_title}'")
+                        
+                        if success_img and success_db:
+                            st.success(f"Successfully uploaded and permanently synced '{final_title}'!")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("Error syncing with GitHub. Check secrets token configurations.")
+                    else:
+                        st.warning("GITHUB_TOKEN not configured. Song is saved temporarily on the server.")
+                        st.cache_data.clear()
+                        st.rerun()
+
+    else:
+        # Multiple Uploads
+        uploaded_files = st.file_uploader(
+            "Select multiple sheet music images (or select all inside a folder)", 
+            type=["jpg", "jpeg", "png", "bmp", "tiff"], 
+            accept_multiple_files=True,
+            key="multi_files"
+        )
+        
+        if uploaded_files:
+            st.write(f"Selected {len(uploaded_files)} images.")
+            
+            if st.button("Extract & Upload All", type="primary"):
+                progress_bar = st.progress(0)
+                status_txt = st.empty()
+                
+                conn = get_db_connection()
+                cursor = conn.cursor()
+
+                uploaded_images = [] # keep track of images to push to git
+                
+                for idx, file in enumerate(uploaded_files):
+                    status_txt.write(f"Processing [{idx+1}/{len(uploaded_files)}]: {file.name}")
+                    
+                    image_bytes = file.getvalue()
+                    
+                    # Run OCR
+                    extracted_text = ""
+                    if PYTESSERACT_AVAILABLE:
+                        try:
+                            img = Image.open(file)
+                            extracted_text = pytesseract.image_to_string(img, lang='ara+eng')
+                        except Exception:
+                            pass
+                    
+                    # Auto-detect title
+                    detected_title = detect_title_from_text(extracted_text, file.name)
+                    
+                    # Save locally
+                    file_ext = os.path.splitext(file.name)[1]
+                    unique_name = f"{uuid.uuid4()}{file_ext}"
+                    temp_image_path = os.path.join("/tmp", unique_name)
+                    
+                    with open(temp_image_path, "wb") as f:
+                        f.write(image_bytes)
+
+                    git_image_path = f"stored_hymns/{unique_name}"
+                    
+                    # Add to database
+                    cursor.execute(
+                        'INSERT INTO hymns (title, image_path, extracted_text) VALUES (?, ?, ?)', 
+                        (detected_title, git_image_path, extracted_text)
+                    )
+                    
+                    uploaded_images.append((git_image_path, image_bytes, detected_title))
+                    progress_bar.progress((idx + 1) / len(uploaded_files))
+                
+                conn.commit()
+                conn.close()
+
+                # Sync Batch to GitHub
                 if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
                     token = st.secrets["GITHUB_TOKEN"]
                     repo = st.secrets["GITHUB_REPO"]
                     
-                    with st.spinner("Uploading and Syncing to GitHub Repository..."):
-                        # Read updated SQLite binary bytes from /tmp
-                        with open(DB_NAME, "rb") as f:
-                            db_bytes = f.read()
-                            
-                        # Commit image to stored_hymns/ and commit database file
-                        success_img = upload_to_github(token, repo, git_image_path, image_bytes, f"Uploaded sheet music for '{upload_title}'")
-                        success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Updated database with entry '{upload_title}'")
-                        
-                        if success_img and success_db:
-                            st.success(f"Success! '{upload_title}' has been uploaded and permanently saved to GitHub.")
-                            st.cache_data.clear() 
-                            st.rerun()
-                        else:
-                            st.error("Linked successfully to server, but failed to sync changes to GitHub. Verify your token permissions.")
+                    status_txt.write("Syncing files with GitHub...")
+                    
+                    # Push images
+                    img_failures = 0
+                    for git_path, img_bytes, s_title in uploaded_images:
+                        if not upload_to_github(token, repo, git_path, img_bytes, f"Batch upload '{s_title}'"):
+                            img_failures += 1
+                    
+                    # Push database
+                    with open(DB_NAME, "rb") as f:
+                        db_bytes = f.read()
+                    success_db = upload_to_github(token, repo, REPO_DB, db_bytes, "Batch update database")
+                    
+                    status_txt.empty()
+                    progress_bar.empty()
+                    
+                    if success_db and img_failures == 0:
+                        st.success(f"Batch upload complete! Successfully processed and permanently synced {len(uploaded_files)} hymns.")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"Database synced, but {img_failures} images failed to push. Verify token permissions.")
                 else:
-                    st.warning(
-                        "Song saved locally but GITHUB_TOKEN is not configured in secrets. "
-                        "This upload will be lost when the Streamlit server restarts."
-                    )
+                    status_txt.empty()
+                    progress_bar.empty()
+                    st.warning("Batch complete, but saved only temporarily (no GITHUB_TOKEN configured).")
                     st.cache_data.clear()
                     st.rerun()
 
-# ----------------- MAIN VIEW WINDOW -----------------
-if selected_hymn:
-    hymn_id, title, image_path = selected_hymn
-    st.subheader(title)
+# ------------------------------------------
+# TAB 3: MANAGE LIBRARY
+# ------------------------------------------
+with tab_manage:
+    st.header("Library Administration")
     
-    # 1. Sidebar option to Delete
-    if st.sidebar.button("🗑️ Delete Selected Hymn", type="secondary"):
-        if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
-            token = st.secrets["GITHUB_TOKEN"]
-            repo = st.secrets["GITHUB_REPO"]
-            
-            with st.spinner("Deleting and Syncing with GitHub..."):
-                # Remove entry from DB
-                try:
+    all_hymns = get_hymns("")
+    
+    if all_hymns:
+        st.subheader("Bulk Deletion")
+        st.write("Select one or more hymns below to permanently delete them from the library and from GitHub.")
+        
+        # Map titles to database rows
+        hymn_map = {row[1]: row for row in all_hymns}
+        
+        to_delete = st.multiselect("Select hymns to delete:", options=list(hymn_map.keys()))
+        
+        if st.button("🗑️ Delete Selected Hymns", type="primary"):
+            if not to_delete:
+                st.warning("Please select at least one hymn to delete.")
+            else:
+                with st.spinner("Deleting files and syncing with GitHub..."):
                     conn = get_db_connection()
                     cursor = conn.cursor()
-                    cursor.execute("DELETE FROM hymns WHERE id = ?", (hymn_id,))
+                    
+                    # Check token
+                    has_github = "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets
+                    if has_github:
+                        token = st.secrets["GITHUB_TOKEN"]
+                        repo = st.secrets["GITHUB_REPO"]
+                    
+                    deleted_count = 0
+                    for title in to_delete:
+                        hymn_id, _, image_path = hymn_map[title]
+                        
+                        # 1. Remove from SQLite in /tmp
+                        cursor.execute("DELETE FROM hymns WHERE id = ?", (hymn_id,))
+                        
+                        # 2. Delete from GitHub if connected
+                        if has_github:
+                            try:
+                                delete_from_github(token, repo, image_path, f"Deleted hymn '{title}'")
+                            except Exception:
+                                pass # Pass silently if image already deleted on remote
+                        
+                        deleted_count += 1
+                        
                     conn.commit()
                     conn.close()
-                except Exception as e:
-                    st.error(f"Failed to delete from local database: {e}")
-                
-                # Try to delete the physical image file on GitHub
-                try:
-                    delete_from_github(token, repo, image_path, f"Deleted hymn '{title}'")
-                except Exception:
-                    pass
-                
-                # Push updated SQLite database bytes back to Git
-                with open(DB_NAME, "rb") as f:
-                    db_bytes = f.read()
-                success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Deleted hymn '{title}' from DB")
-                
-                if success_db:
-                    st.success(f"'{title}' has been successfully deleted!")
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error("Failed to sync database deletion to GitHub.")
-        else:
-            try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM hymns WHERE id = ?", (hymn_id,))
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                st.error(f"Failed to delete from local database: {e}")
-            st.warning("Deleted temporarily on the server. Change will be lost when the server restarts.")
-            st.cache_data.clear()
-            st.rerun()
-
-    # 2. Display Image
-    resolved_path = get_image_path(image_path)
-    if os.path.exists(resolved_path):
-        st.image(resolved_path, use_container_width=True)
+                    
+                    # Sync DB to GitHub
+                    if has_github:
+                        with open(DB_NAME, "rb") as f:
+                            db_bytes = f.read()
+                        success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Batch deleted {deleted_count} hymns")
+                        
+                        if success_db:
+                            st.success(f"Permanently deleted {deleted_count} hymns and synced with GitHub!")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("Deleted from local session database, but failed to sync changes back to GitHub.")
+                    else:
+                        st.warning(f"Deleted {deleted_count} hymns locally. Changes will be lost when the server restarts.")
+                        st.cache_data.clear()
+                        st.rerun()
     else:
-        st.error(f"Image file not found on server: {resolved_path}")
-else:
-    st.write("### Welcome to the Hymn Library")
-    st.write("Select a hymn from the sidebar menu to begin playing.")
+        st.info("No hymns in the library to manage.")
