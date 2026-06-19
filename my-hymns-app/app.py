@@ -3,6 +3,7 @@ import sqlite3
 import uuid
 import base64
 import shutil
+import platform
 import requests
 import streamlit as st
 from PIL import Image
@@ -100,22 +101,39 @@ def delete_from_github(token, repo, file_path, commit_message):
         requests.delete(url, headers=headers, json=payload)
 
 # ----------------- DATABASE UTILITIES -----------------
-def get_hymns(search_query=""):
-    if not os.path.exists(DB_NAME):
-        return []
-    conn = sqlite3.connect(DB_NAME)
+def get_db_connection():
+    """Establishes connection and ensures the table exists to prevent OperationalErrors."""
+    conn = sqlite3.connect(DB_NAME, timeout=30.0)
     cursor = conn.cursor()
-    if search_query.strip() == "":
-        cursor.execute("SELECT id, title, image_path FROM hymns ORDER BY title ASC")
-    else:
-        cursor.execute('''
-            SELECT id, title, image_path FROM hymns 
-            WHERE title LIKE ? OR extracted_text LIKE ? 
-            ORDER BY title ASC
-        ''', (f"%{search_query}%", f"%{search_query}%"))
-    results = cursor.fetchall()
-    conn.close()
-    return results
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS hymns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            extracted_text TEXT
+        )
+    ''')
+    conn.commit()
+    return conn
+
+def get_hymns(search_query=""):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if search_query.strip() == "":
+            cursor.execute("SELECT id, title, image_path FROM hymns ORDER BY title ASC")
+        else:
+            cursor.execute('''
+                SELECT id, title, image_path FROM hymns 
+                WHERE title LIKE ? OR extracted_text LIKE ? 
+                ORDER BY title ASC
+            ''', (f"%{search_query}%", f"%{search_query}%"))
+        results = cursor.fetchall()
+        conn.close()
+        return results
+    except Exception as e:
+        st.error(f"Database Query Error: {e}")
+        return []
 
 def get_image_path(image_path):
     """Locates the image on the server, fallback to /tmp if not yet synced with Git."""
@@ -191,14 +209,17 @@ with st.sidebar.expander("➕ Upload New Hymn", expanded=False):
                 git_image_path = f"stored_hymns/{unique_name}"
 
                 # 4. Insert record into writeable SQLite database in /tmp
-                conn = sqlite3.connect(DB_NAME)
-                cursor = conn.cursor()
-                cursor.execute(
-                    'INSERT INTO hymns (title, image_path, extracted_text) VALUES (?, ?, ?)', 
-                    (upload_title, git_image_path, extracted_text)
-                )
-                conn.commit()
-                conn.close()
+                try:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        'INSERT INTO hymns (title, image_path, extracted_text) VALUES (?, ?, ?)', 
+                        (upload_title, git_image_path, extracted_text)
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as e:
+                    st.error(f"Failed to write to local database: {e}")
 
                 # 5. Sync files to GitHub Repository permanently
                 if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
@@ -241,11 +262,14 @@ if selected_hymn:
             
             with st.spinner("Deleting and Syncing with GitHub..."):
                 # Remove entry from DB
-                conn = sqlite3.connect(DB_NAME)
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM hymns WHERE id = ?", (hymn_id,))
-                conn.commit()
-                conn.close()
+                try:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM hymns WHERE id = ?", (hymn_id,))
+                    conn.commit()
+                    conn.close()
+                except Exception as e:
+                    st.error(f"Failed to delete from local database: {e}")
                 
                 # Try to delete the physical image file on GitHub
                 try:
@@ -265,11 +289,14 @@ if selected_hymn:
                 else:
                     st.error("Failed to sync database deletion to GitHub.")
         else:
-            conn = sqlite3.connect(DB_NAME)
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM hymns WHERE id = ?", (hymn_id,))
-            conn.commit()
-            conn.close()
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM hymns WHERE id = ?", (hymn_id,))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                st.error(f"Failed to delete from local database: {e}")
             st.warning("Deleted temporarily on the server. Change will be lost when the server restarts.")
             st.cache_data.clear()
             st.rerun()
