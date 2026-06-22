@@ -32,6 +32,14 @@ except ImportError:
 # Set page config
 st.set_page_config(page_title="Hymn Library", layout="wide", initial_sidebar_state="expanded")
 
+# ==========================================
+# FILE UPLOADER DYNAMIC STATE INITIALIZATION
+# ==========================================
+if "single_file_key" not in st.session_state:
+    st.session_state["single_file_key"] = "uploader_single_init"
+if "multi_file_key" not in st.session_state:
+    st.session_state["multi_file_key"] = "uploader_multi_init"
+
 # =========================================================
 # WARM IVORY & ACOUSTIC WOOD LIGHT-THEME STYLING
 # =========================================================
@@ -377,12 +385,51 @@ with tab_view:
             if os.path.exists(resolved_path):
                 ext = os.path.splitext(resolved_path)[1].lower()
                 
+                # Render Universal HTML5/Safari Full Screen Trigger Button
+                # Works on all file formats (Images, PDFs, Word, Text)
+                st.markdown("""
+                    <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
+                        <button onclick="toggleFullscreen()" style="
+                            background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+                            color: white;
+                            border: none;
+                            border-radius: 8px;
+                            padding: 10px 18px;
+                            font-weight: bold;
+                            font-size: 14px;
+                            cursor: pointer;
+                            box-shadow: 0 4px 12px rgba(29, 78, 216, 0.3);
+                            transition: all 0.2s ease;
+                        ">⛶ Full Screen</button>
+                    </div>
+                    <script>
+                        function toggleFullscreen() {
+                            var elem = document.getElementById("fs-target");
+                            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                                if (elem.requestFullscreen) {
+                                    elem.requestFullscreen();
+                                } else if (elem.webkitRequestFullscreen) { /* iPadOS & Safari */
+                                    elem.webkitRequestFullscreen();
+                                }
+                            } else {
+                                if (document.exitFullscreen) {
+                                    document.exitFullscreen();
+                                } else if (document.webkitExitFullscreen) {
+                                    document.webkitExitFullscreen();
+                                }
+                            }
+                        }
+                    </script>
+                """, unsafe_allow_html=True)
+                
+                # Start of Fullscreen Target Container (preserves warm sheet paper background)
+                st.markdown("<div id='fs-target' style='background-color: #fcfaf2; padding: 15px; border-radius: 8px; width: 100%; overflow-y: auto; max-height: 85vh;'>", unsafe_allow_html=True)
+                
                 # Render Based on File Type
                 if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff'):
                     st.image(resolved_path, use_container_width=True)
                     
                 elif ext == '.pdf':
-                    # Embed PDF dynamically in an iframe using standard browser viewer
                     try:
                         with open(resolved_path, "rb") as f:
                             base64_pdf = base64.b64encode(f.read()).decode('utf-8')
@@ -392,7 +439,6 @@ with tab_view:
                         st.error(f"Failed to display PDF: {e}")
                         
                 elif ext in ('.docx', '.txt'):
-                    # Render Word/Text documents directly as styled monospaced text block (preserves chord formatting)
                     text_content = ""
                     if ext == '.txt':
                         text_content = extract_text_from_txt(resolved_path)
@@ -400,9 +446,12 @@ with tab_view:
                         text_content = extract_text_from_docx(resolved_path)
                         
                     st.markdown(
-                        f"<pre style='font-family: monospace; font-size: 16px; background-color: #fcfaf2; color: #2c2a29; border: 1px solid #dfdace; padding: 15px; border-radius: 8px; white-space: pre-wrap;'>{text_content}</pre>", 
+                        f"<pre style='font-family: monospace; font-size: 16px; background-color: #fcfaf2; color: #2c2a29; border: none; padding: 0px; white-space: pre-wrap;'>{text_content}</pre>", 
                         unsafe_allow_html=True
                     )
+                
+                # End of Fullscreen Target Container
+                st.markdown("</div>", unsafe_allow_html=True)
             else:
                 st.error(f"File not found on server: {resolved_path}")
             
@@ -432,7 +481,12 @@ with tab_import:
     import_mode = st.radio("Upload Mode:", ["Single File Upload", "Multiple Files / Folder Upload"], horizontal=True)
 
     if import_mode == "Single File Upload":
-        uploaded_file = st.file_uploader("Select Sheet Music Image or Document", type=SUPPORTED_EXTENSIONS, key="single_file")
+        # Uses dynamically rotated key to auto-clear files on success
+        uploaded_file = st.file_uploader(
+            "Select Sheet Music Image or Document", 
+            type=SUPPORTED_EXTENSIONS, 
+            key=st.session_state["single_file_key"]
+        )
         
         if uploaded_file:
             detected_title = get_title_from_filename(uploaded_file.name)
@@ -449,7 +503,7 @@ with tab_import:
                     with open(temp_image_path, "wb") as f:
                         f.write(file_bytes)
 
-                    # Extract searchable text based on file format
+                    # Extract text
                     extracted_text = ""
                     if file_ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff'):
                         if PYTESSERACT_AVAILABLE:
@@ -493,12 +547,16 @@ with tab_import:
                         
                         if success_img and success_db:
                             st.success(f"Successfully uploaded and permanently synced '{final_title}'!")
+                            
+                            # Rotate single file uploader key to wipe the UI files
+                            st.session_state["single_file_key"] = f"uploader_single_{uuid.uuid4()}"
                             st.cache_data.clear()
                             st.rerun()
                         else:
                             st.error("Error syncing with GitHub. Check secrets token configurations.")
                     else:
                         st.warning("GITHUB_TOKEN not configured. Song is saved temporarily on the server.")
+                        st.session_state["single_file_key"] = f"uploader_single_{uuid.uuid4()}"
                         st.cache_data.clear()
                         st.rerun()
 
@@ -508,7 +566,7 @@ with tab_import:
             "Select multiple images/documents (or select all inside a folder)", 
             type=SUPPORTED_EXTENSIONS, 
             accept_multiple_files=True,
-            key="multi_files"
+            key=st.session_state["multi_file_key"]
         )
         
         if uploaded_files:
@@ -589,6 +647,9 @@ with tab_import:
                     
                     if success_db and img_failures == 0:
                         st.success(f"Batch upload complete! Successfully processed and permanently synced {len(uploaded_files)} hymns.")
+                        
+                        # Rotate multi file uploader key to wipe the UI files
+                        st.session_state["multi_file_key"] = f"uploader_multi_{uuid.uuid4()}"
                         st.cache_data.clear()
                         st.rerun()
                     else:
@@ -597,6 +658,7 @@ with tab_import:
                     status_txt.empty()
                     progress_bar.empty()
                     st.warning("Batch complete, but saved only temporarily (no GITHUB_TOKEN configured).")
+                    st.session_state["multi_file_key"] = f"uploader_multi_{uuid.uuid4()}"
                     st.cache_data.clear()
                     st.rerun()
 
