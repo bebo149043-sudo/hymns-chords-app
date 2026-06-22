@@ -4,9 +4,23 @@ import uuid
 import base64
 import shutil
 import platform
+import re
 import requests
 import streamlit as st
 from PIL import Image
+
+# Attempt to import document parsing libraries
+try:
+    import pypdf
+    PYPDF_AVAILABLE = True
+except ImportError:
+    PYPDF_AVAILABLE = False
+
+try:
+    import docx
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
 
 # Attempt to import pytesseract. 
 try:
@@ -139,6 +153,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Supported extensions
+SUPPORTED_EXTENSIONS = ["jpg", "jpeg", "png", "bmp", "tiff", "pdf", "docx", "txt"]
+
 # ==========================================
 # WRITEABLE PATH WORKAROUND FOR CLOUD
 # ==========================================
@@ -210,15 +227,71 @@ def delete_from_github(token, repo, file_path, commit_message):
 def get_title_from_filename(filename):
     """Generates a clean title directly from the original imported filename."""
     base_name = os.path.splitext(filename)[0]
-    # Replace underscores and dashes with spaces, and strip trailing spaces
     cleaned = base_name.replace('_', ' ').replace('-', ' ').strip()
-    # Title-case for English names; leaves Arabic text untouched
     return cleaned.title()
+
+# ----------------- DOCUMENT TEXT EXTRACTORS -----------------
+def extract_text_from_pdf(file_path):
+    if not PYPDF_AVAILABLE:
+        return ""
+    text = ""
+    try:
+        reader = pypdf.PdfReader(file_path)
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+    except Exception as e:
+        print(f"PDF extraction error: {e}")
+    return text
+
+def extract_text_from_docx(file_path):
+    if not DOCX_AVAILABLE:
+        return ""
+    text = ""
+    try:
+        doc = docx.Document(file_path)
+        text = "\n".join([para.text for para in doc.paragraphs])
+    except Exception as e:
+        print(f"DOCX extraction error: {e}")
+    return text
+
+def extract_text_from_txt(file_path):
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(file_path, "r", encoding="latin-1") as f:
+                return f.read()
+        except Exception:
+            return ""
+    except Exception:
+        return ""
+
+# ----------------- ARABIC FUZZY SEARCH NORMALIZATION -----------------
+def normalize_arabic(text):
+    """Normalizes Arabic characters to allow spelling-tolerant, fuzzy searches."""
+    if not text:
+        return ""
+    text = text.lower().strip()
+    # Remove Tashkeel (Arabic diacritics)
+    text = re.sub(r"[\u064B-\u0652]", "", text)
+    # Normalize Alif variants (أ, إ, آ -> ا)
+    text = re.sub(r"[أإآ]", "ا", text)
+    # Normalize Yaa and Alef Layena (ى -> ي)
+    text = re.sub(r"ى", "ي", text)
+    # Normalize Taa Marbuta and Haa (ة -> ه)
+    text = re.sub(r"ة", "ه", text)
+    return text
 
 # ----------------- DATABASE UTILITIES -----------------
 def get_db_connection():
-    """Establishes connection and ensures the table exists to prevent OperationalErrors."""
+    """Establishes connection, registers custom Arabic normalizer, and ensures table exists."""
     conn = sqlite3.connect(DB_NAME, timeout=30.0)
+    # Register our custom normalizer function with SQLite
+    conn.create_function("normalize_arabic", 1, normalize_arabic)
+    
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS hymns (
@@ -238,11 +311,13 @@ def get_hymns(search_query=""):
         if search_query.strip() == "":
             cursor.execute("SELECT id, title, image_path FROM hymns ORDER BY title ASC")
         else:
+            normalized_query = normalize_arabic(search_query)
             cursor.execute('''
                 SELECT id, title, image_path FROM hymns 
-                WHERE title LIKE ? OR extracted_text LIKE ? 
+                WHERE normalize_arabic(title) LIKE ? 
+                   OR normalize_arabic(extracted_text) LIKE ? 
                 ORDER BY title ASC
-            ''', (f"%{search_query}%", f"%{search_query}%"))
+            ''', (f"%{normalized_query}%", f"%{normalized_query}%"))
         results = cursor.fetchall()
         conn.close()
         return results
@@ -298,12 +373,38 @@ with tab_view:
             hymn_id, title, image_path = selected_hymn
             st.markdown(f"## {title}")
             
-            # Display Image
             resolved_path = get_image_path(image_path)
             if os.path.exists(resolved_path):
-                st.image(resolved_path, use_container_width=True)
+                ext = os.path.splitext(resolved_path)[1].lower()
+                
+                # Render Based on File Type
+                if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff'):
+                    st.image(resolved_path, use_container_width=True)
+                    
+                elif ext == '.pdf':
+                    # Embed PDF dynamically in an iframe using standard browser viewer
+                    try:
+                        with open(resolved_path, "rb") as f:
+                            base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+                        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800" type="application/pdf"></iframe>'
+                        st.markdown(pdf_display, unsafe_allow_html=True)
+                    except Exception as e:
+                        st.error(f"Failed to display PDF: {e}")
+                        
+                elif ext in ('.docx', '.txt'):
+                    # Render Word/Text documents directly as styled monospaced text block (preserves chord formatting)
+                    text_content = ""
+                    if ext == '.txt':
+                        text_content = extract_text_from_txt(resolved_path)
+                    elif ext == '.docx':
+                        text_content = extract_text_from_docx(resolved_path)
+                        
+                    st.markdown(
+                        f"<pre style='font-family: monospace; font-size: 16px; background-color: #fcfaf2; color: #2c2a29; border: 1px solid #dfdace; padding: 15px; border-radius: 8px; white-space: pre-wrap;'>{text_content}</pre>", 
+                        unsafe_allow_html=True
+                    )
             else:
-                st.error(f"Image not found on server: {resolved_path}")
+                st.error(f"File not found on server: {resolved_path}")
             
             # View Extracted Text Expander
             with st.expander("🔍 View Extracted Text (Lyrics & Chords)", expanded=False):
@@ -313,7 +414,7 @@ with tab_view:
                 text = row[0] if (row and row[0]) else ""
                 
                 st.text_area(
-                    "Indexed OCR Text:", 
+                    "Indexed OCR / Document Text:", 
                     value=text if text.strip() else "No text extracted from this hymn.",
                     height=250,
                     disabled=True
@@ -328,38 +429,41 @@ with tab_view:
 with tab_import:
     st.header("Import Hymns")
     
-    import_mode = st.radio("Upload Mode:", ["Single Image Upload", "Multiple Images / Folder Upload"], horizontal=True)
+    import_mode = st.radio("Upload Mode:", ["Single File Upload", "Multiple Files / Folder Upload"], horizontal=True)
 
-    if import_mode == "Single Image Upload":
-        uploaded_file = st.file_uploader("Select Sheet Music Image", type=["jpg", "jpeg", "png", "bmp", "tiff"], key="single_file")
+    if import_mode == "Single File Upload":
+        uploaded_file = st.file_uploader("Select Sheet Music Image or Document", type=SUPPORTED_EXTENSIONS, key="single_file")
         
         if uploaded_file:
-            # Title is immediately generated from the filename
             detected_title = get_title_from_filename(uploaded_file.name)
-
-            # Allow user to view and modify the title
             final_title = st.text_input("Hymn Title (العنوان):", value=detected_title)
 
             if st.button("Confirm and Upload", type="primary"):
-                with st.spinner("Processing Upload and OCR..."):
-                    image_bytes = uploaded_file.getvalue()
+                with st.spinner("Processing Upload and Text Extraction..."):
+                    file_bytes = uploaded_file.getvalue()
+                    file_ext = os.path.splitext(uploaded_file.name)[1].lower()
                     
-                    # Run Arabic OCR in background for indexing search text
-                    extracted_text = ""
-                    if PYTESSERACT_AVAILABLE:
-                        try:
-                            img = Image.open(uploaded_file)
-                            extracted_text = pytesseract.image_to_string(img, lang='ara+eng')
-                        except Exception as e:
-                            st.error(f"OCR Error: {e}")
-
-                    # Save locally to /tmp
-                    file_ext = os.path.splitext(uploaded_file.name)[1]
+                    # Save temporarily to /tmp
                     unique_name = f"{uuid.uuid4()}{file_ext}"
                     temp_image_path = os.path.join("/tmp", unique_name)
-                    
                     with open(temp_image_path, "wb") as f:
-                        f.write(image_bytes)
+                        f.write(file_bytes)
+
+                    # Extract searchable text based on file format
+                    extracted_text = ""
+                    if file_ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff'):
+                        if PYTESSERACT_AVAILABLE:
+                            try:
+                                img = Image.open(uploaded_file)
+                                extracted_text = pytesseract.image_to_string(img, lang='ara+eng')
+                            except Exception as e:
+                                st.error(f"OCR Error: {e}")
+                    elif file_ext == '.pdf':
+                        extracted_text = extract_text_from_pdf(temp_image_path)
+                    elif file_ext == '.docx':
+                        extracted_text = extract_text_from_docx(temp_image_path)
+                    elif file_ext == '.txt':
+                        extracted_text = extract_text_from_txt(temp_image_path)
 
                     git_image_path = f"stored_hymns/{unique_name}"
 
@@ -384,7 +488,7 @@ with tab_import:
                         with open(DB_NAME, "rb") as f:
                             db_bytes = f.read()
                         
-                        success_img = upload_to_github(token, repo, git_image_path, image_bytes, f"Uploaded '{final_title}'")
+                        success_img = upload_to_github(token, repo, git_image_path, file_bytes, f"Uploaded '{final_title}'")
                         success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Updated database with '{final_title}'")
                         
                         if success_img and success_db:
@@ -401,14 +505,14 @@ with tab_import:
     else:
         # Multiple Uploads
         uploaded_files = st.file_uploader(
-            "Select multiple sheet music images (or select all inside a folder)", 
-            type=["jpg", "jpeg", "png", "bmp", "tiff"], 
+            "Select multiple images/documents (or select all inside a folder)", 
+            type=SUPPORTED_EXTENSIONS, 
             accept_multiple_files=True,
             key="multi_files"
         )
         
         if uploaded_files:
-            st.write(f"Selected {len(uploaded_files)} images.")
+            st.write(f"Selected {len(uploaded_files)} files.")
             
             if st.button("Extract & Upload All", type="primary"):
                 progress_bar = st.progress(0)
@@ -422,28 +526,32 @@ with tab_import:
                 for idx, file in enumerate(uploaded_files):
                     status_txt.write(f"Processing [{idx+1}/{len(uploaded_files)}]: {file.name}")
                     
-                    image_bytes = file.getvalue()
+                    file_bytes = file.getvalue()
+                    file_ext = os.path.splitext(file.name)[1].lower()
                     
-                    # Run OCR behind the scenes
-                    extracted_text = ""
-                    if PYTESSERACT_AVAILABLE:
-                        try:
-                            img = Image.open(file)
-                            extracted_text = pytesseract.image_to_string(img, lang='ara+eng')
-                        except Exception:
-                            pass
-                    
-                    # FIXED: Now calls get_title_from_filename to prevent NameError
-                    detected_title = get_title_from_filename(file.name)
-                    
-                    # Save locally
-                    file_ext = os.path.splitext(file.name)[1]
+                    # Save locally temporarily to /tmp
                     unique_name = f"{uuid.uuid4()}{file_ext}"
                     temp_image_path = os.path.join("/tmp", unique_name)
-                    
                     with open(temp_image_path, "wb") as f:
-                        f.write(image_bytes)
+                        f.write(file_bytes)
 
+                    # Extract searchable text
+                    extracted_text = ""
+                    if file_ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff'):
+                        if PYTESSERACT_AVAILABLE:
+                            try:
+                                img = Image.open(file)
+                                extracted_text = pytesseract.image_to_string(img, lang='ara+eng')
+                            except Exception:
+                                pass
+                    elif file_ext == '.pdf':
+                        extracted_text = extract_text_from_pdf(temp_image_path)
+                    elif file_ext == '.docx':
+                        extracted_text = extract_text_from_docx(temp_image_path)
+                    elif file_ext == '.txt':
+                        extracted_text = extract_text_from_txt(temp_image_path)
+                    
+                    detected_title = get_title_from_filename(file.name)
                     git_image_path = f"stored_hymns/{unique_name}"
                     
                     # Add to database
@@ -452,7 +560,7 @@ with tab_import:
                         (detected_title, git_image_path, extracted_text)
                     )
                     
-                    uploaded_images.append((git_image_path, image_bytes, detected_title))
+                    uploaded_images.append((git_image_path, file_bytes, detected_title))
                     progress_bar.progress((idx + 1) / len(uploaded_files))
                 
                 conn.commit()
@@ -465,7 +573,7 @@ with tab_import:
                     
                     status_txt.write("Syncing files with GitHub...")
                     
-                    # Push images
+                    # Push images/documents
                     img_failures = 0
                     for git_path, img_bytes, s_title in uploaded_images:
                         if not upload_to_github(token, repo, git_path, img_bytes, f"Batch upload '{s_title}'"):
@@ -484,7 +592,7 @@ with tab_import:
                         st.cache_data.clear()
                         st.rerun()
                     else:
-                        st.error(f"Database synced, but {img_failures} images failed to push. Verify token permissions.")
+                        st.error(f"Database synced, but {img_failures} files failed to push. Verify token permissions.")
                 else:
                     status_txt.empty()
                     progress_bar.empty()
