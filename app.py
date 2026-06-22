@@ -379,51 +379,45 @@ with tab_view:
     with col_main:
         if selected_hymn:
             hymn_id, title, image_path = selected_hymn
-            st.markdown(f"## {title}")
+            
+            # Subheader and Focus Mode Toggle Layout
+            col_title, col_toggle = st.columns([3, 1])
+            with col_title:
+                st.markdown(f"## {title}")
+            with col_toggle:
+                focus_mode = st.toggle(
+                    "⛶ Focus Mode", 
+                    value=False, 
+                    help="Collapses all sidebars and headers to give you 100% fullscreen reading space."
+                )
+            
+            # Direct CSS injection to collapse the entire page structure when in Focus Mode
+            if focus_mode:
+                st.markdown("""
+                    <style>
+                    /* Collapse sidebar menu */
+                    section[data-testid="stSidebar"] {
+                        display: none !important;
+                    }
+                    /* Collapse main top header bar */
+                    header {
+                        display: none !important;
+                    }
+                    /* Expand main container limits */
+                    div[data-testid="stAppViewBlockContainer"] {
+                        max-width: 100% !important;
+                        padding: 1rem 2rem !important;
+                    }
+                    /* Hide non-active workspace tabs */
+                    div[data-testid="stTabs"] [data-baseweb="tab-list"] {
+                        display: none !important;
+                    }
+                    </style>
+                """, unsafe_allow_html=True)
             
             resolved_path = get_image_path(image_path)
             if os.path.exists(resolved_path):
                 ext = os.path.splitext(resolved_path)[1].lower()
-                
-                # Render Universal HTML5/Safari Full Screen Trigger Button
-                # Works on all file formats (Images, PDFs, Word, Text)
-                st.markdown("""
-                    <div style="display: flex; justify-content: flex-end; margin-bottom: 10px;">
-                        <button onclick="toggleFullscreen()" style="
-                            background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
-                            color: white;
-                            border: none;
-                            border-radius: 8px;
-                            padding: 10px 18px;
-                            font-weight: bold;
-                            font-size: 14px;
-                            cursor: pointer;
-                            box-shadow: 0 4px 12px rgba(29, 78, 216, 0.3);
-                            transition: all 0.2s ease;
-                        ">⛶ Full Screen</button>
-                    </div>
-                    <script>
-                        function toggleFullscreen() {
-                            var elem = document.getElementById("fs-target");
-                            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                                if (elem.requestFullscreen) {
-                                    elem.requestFullscreen();
-                                } else if (elem.webkitRequestFullscreen) { /* iPadOS & Safari */
-                                    elem.webkitRequestFullscreen();
-                                }
-                            } else {
-                                if (document.exitFullscreen) {
-                                    document.exitFullscreen();
-                                } else if (document.webkitExitFullscreen) {
-                                    document.webkitExitFullscreen();
-                                }
-                            }
-                        }
-                    </script>
-                """, unsafe_allow_html=True)
-                
-                # Start of Fullscreen Target Container (preserves warm sheet paper background)
-                st.markdown("<div id='fs-target' style='background-color: #fcfaf2; padding: 15px; border-radius: 8px; width: 100%; overflow-y: auto; max-height: 85vh;'>", unsafe_allow_html=True)
                 
                 # Render Based on File Type
                 if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff'):
@@ -433,7 +427,7 @@ with tab_view:
                     try:
                         with open(resolved_path, "rb") as f:
                             base64_pdf = base64.b64encode(f.read()).decode('utf-8')
-                        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800" type="application/pdf"></iframe>'
+                        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="900" type="application/pdf" style="border: none; border-radius: 8px;"></iframe>'
                         st.markdown(pdf_display, unsafe_allow_html=True)
                     except Exception as e:
                         st.error(f"Failed to display PDF: {e}")
@@ -446,16 +440,13 @@ with tab_view:
                         text_content = extract_text_from_docx(resolved_path)
                         
                     st.markdown(
-                        f"<pre style='font-family: monospace; font-size: 16px; background-color: #fcfaf2; color: #2c2a29; border: none; padding: 0px; white-space: pre-wrap;'>{text_content}</pre>", 
+                        f"<pre style='font-family: monospace; font-size: 16px; background-color: #fcfaf2; color: #2c2a29; border: 1px solid #dfdace; padding: 15px; border-radius: 8px; white-space: pre-wrap;'>{text_content}</pre>", 
                         unsafe_allow_html=True
                     )
-                
-                # End of Fullscreen Target Container
-                st.markdown("</div>", unsafe_allow_html=True)
             else:
                 st.error(f"File not found on server: {resolved_path}")
             
-            # View Extracted Text Expander
+            # View Extracted Text Expander (Hidden in Focus Mode automatically if wrapped inside tab)
             with st.expander("🔍 View Extracted Text (Lyrics & Chords)", expanded=False):
                 conn = get_db_connection()
                 row = conn.execute("SELECT extracted_text FROM hymns WHERE id=?", (hymn_id,)).fetchone()
