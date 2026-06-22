@@ -343,8 +343,90 @@ def get_image_path(image_path):
         return tmp_path
     return image_path
 
+# =========================================================
+# GLOBAL FULLSCREEN OVERLAY INJECTION (100% INSIDE THE APP)
+# =========================================================
+if "fullscreen_active" not in st.session_state:
+    st.session_state["fullscreen_active"] = False
+
+# If fullscreen is active, hijack rendering to show ONLY the edge-to-edge document viewport
+if st.session_state["fullscreen_active"] and "current_selected_id" in st.session_state:
+    conn = get_db_connection()
+    active_row = conn.execute("SELECT id, title, image_path FROM hymns WHERE id = ?", (st.session_state["current_selected_id"],)).fetchone()
+    conn.close()
+    
+    if active_row:
+        h_id, h_title, h_path = active_row
+        resolved_path = get_image_path(h_path)
+        ext = os.path.splitext(resolved_path)[1].lower()
+        
+        # Inject CSS to override and clear all default layouts, sidebars, and paddings
+        st.markdown("""
+            <style>
+            section[data-testid="stSidebar"] { display: none !important; }
+            header { display: none !important; }
+            footer { display: none !important; }
+            div[data-testid="stAppViewBlockContainer"] {
+                max-width: 100% !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                background-color: #fcfaf2 !important; /* Soft warm ivory paper */
+            }
+            .pdf-iframe {
+                height: 94vh !important;
+                width: 100% !important;
+                border: none !important;
+                overflow: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+            }
+            pre {
+                background-color: #fcfaf2 !important;
+                color: #2c2a29 !important;
+                height: 94vh !important;
+                overflow-y: auto !important;
+                padding: 20px !important;
+                font-size: 18px !important;
+                white-space: pre-wrap !important;
+                border: none !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+        
+        # Mini Header Toolbar
+        col_fs_title, col_fs_close = st.columns([5, 1])
+        with col_fs_title:
+            st.markdown(f"<h2 style='color: #4a2c11; margin-left: 20px; margin-top: 10px;'>{h_title}</h2>", unsafe_allow_html=True)
+        with col_fs_close:
+            st.markdown("<div style='margin-top: 10px; margin-right: 20px;'>", unsafe_allow_html=True)
+            if st.button("❌ Close", type="primary"):
+                st.session_state["fullscreen_active"] = False
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+            
+        # Display active document
+        if os.path.exists(resolved_path):
+            if ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff'):
+                st.image(resolved_path, use_container_width=True)
+            elif ext == '.pdf':
+                try:
+                    with open(resolved_path, "rb") as f:
+                        base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+                    # Displays inside a seamless viewport with momentum-touch scrolling active
+                    pdf_display = f'<iframe class="pdf-iframe" src="data:application/pdf;base64,{base64_pdf}"></iframe>'
+                    st.markdown(pdf_display, unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"Failed to display PDF: {e}")
+            elif ext in ('.docx', '.txt'):
+                text_content = extract_text_from_txt(resolved_path) if ext == '.txt' else extract_text_from_docx(resolved_path)
+                st.markdown(f"<pre>{text_content}</pre>", unsafe_allow_html=True)
+        else:
+            st.error("Document not found on the server.")
+            
+        # Stops the execution here to keep only the fullscreen container on screen
+        st.stop()
+
 # ==========================================
-# APP WORKSPACE TABS
+# APP WORKSPACE TABS (Standard Layout)
 # ==========================================
 tab_view, tab_import, tab_manage = st.tabs(["📖 View & Search", "➕ Import Hymns", "🛠️ Manage Library"])
 
@@ -373,6 +455,10 @@ with tab_view:
                 key="view_song_selector"
             )
             selected_hymn = next(row for row in hymn_list if row[1] == selected_title)
+            
+            # Save selection to remember during Fullscreen Rerun
+            if selected_hymn:
+                st.session_state["current_selected_id"] = selected_hymn[0]
         else:
             st.info("No hymns found.")
 
@@ -380,45 +466,15 @@ with tab_view:
         if selected_hymn:
             hymn_id, title, image_path = selected_hymn
             
-            # Subheader and Focus Mode Toggle Layout
-            col_title, col_toggle = st.columns([3, 1])
+            # Subheader and Fullscreen Button Layout
+            col_title, col_btn = st.columns([3, 1])
             with col_title:
                 st.markdown(f"## {title}")
-            with col_toggle:
-                focus_mode = st.toggle(
-                    "⛶ Focus Mode", 
-                    value=False, 
-                    help="Collapses all sidebars and headers to give you 100% fullscreen reading space."
-                )
-            
-            # Direct CSS injection to collapse the entire page structure when in Focus Mode
-            if focus_mode:
-                st.markdown("""
-                    <style>
-                    /* Collapse sidebar menu */
-                    section[data-testid="stSidebar"] {
-                        display: none !important;
-                    }
-                    /* Collapse main top header bar */
-                    header {
-                        display: none !important;
-                    }
-                    /* Expand main container limits and remove margins */
-                    div[data-testid="stAppViewBlockContainer"] {
-                        max-width: 100% !important;
-                        padding: 0.5rem 1rem !important;
-                    }
-                    /* Hide non-active workspace tabs */
-                    div[data-testid="stTabs"] [data-baseweb="tab-list"] {
-                        display: none !important;
-                    }
-                    /* CHANGED: Forces the PDF viewframe to stretch vertically to fit the screen */
-                    .pdf-iframe {
-                        height: 92vh !important;
-                        width: 100% !important;
-                    }
-                    </style>
-                """, unsafe_allow_html=True)
+            with col_btn:
+                # Triggers the new, robust Fullscreen Overlay Mode
+                if st.button("⛶ Full Screen", type="secondary"):
+                    st.session_state["fullscreen_active"] = True
+                    st.rerun()
             
             resolved_path = get_image_path(image_path)
             if os.path.exists(resolved_path):
@@ -431,19 +487,8 @@ with tab_view:
                 elif ext == '.pdf':
                     try:
                         with open(resolved_path, "rb") as f:
-                            pdf_bytes = f.read()
-                            base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-                        
-                        # CHANGED: Added direct Safari/iPadOS native PDF launcher
-                        st.download_button(
-                            label="📖 Open PDF in Native iPad/Tablet Viewer (For Smooth Scrolling & Apple Pencil)",
-                            data=pdf_bytes,
-                            file_name=f"{title}.pdf",
-                            mime="application/pdf"
-                        )
-                        
-                        # Render inside iframe with target CSS class 'pdf-iframe'
-                        pdf_display = f'<iframe class="pdf-iframe" src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800" type="application/pdf" style="border: none; border-radius: 8px;"></iframe>'
+                            base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+                        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800" type="application/pdf" style="border: none; border-radius: 8px;"></iframe>'
                         st.markdown(pdf_display, unsafe_allow_html=True)
                     except Exception as e:
                         st.error(f"Failed to display PDF: {e}")
