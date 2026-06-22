@@ -2,3 +2,5 @@ streamlit
 Pillow
 pytesseract
 requests
+pypdf
+python-docx
