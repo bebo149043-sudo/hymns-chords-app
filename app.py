@@ -293,11 +293,89 @@ def normalize_arabic(text):
     text = re.sub(r"ة", "ه", text)
     return text
 
+# ----------------- INTELLECTUAL MUSIC CHORD ANALYZER -----------------
+def extract_ai_chords(lyrics, api_key, target_key):
+    """Calls Google Gemini API to analyze lyrics and align high-quality chords [13]."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    headers = {"Content-Type": "application/json"}
+    
+    prompt = (
+        "You are an expert musician and worship leader. I will give you the lyrics of a Christian hymn (which may be in Arabic or English).\n"
+        f"Your task is to analyze the lyrics, set them in the musical key of '{target_key}', and write suitable, beautiful chord progressions (using standard chords like C, G, Am, F, Dm, Em, etc.).\n"
+        "You must place these chords EXACTLY above the syllables/words where they should be played, using spaces for horizontal alignment.\n"
+        "Keep the output formatted cleanly so it can be rendered in a monospaced font.\n"
+        "Do not include any introductory, explaining, or concluding text. Only return the final raw lyrics with chords formatted.\n\n"
+        f"Lyrics:\n{lyrics}"
+    )
+    
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ]
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=30.0)
+        if response.status_code == 200:
+            data = response.json()
+            ai_text = data["contents"][0]["parts"][0]["text"] if "contents" in data else data["candidates"][0]["content"]["parts"][0]["text"]
+            # Clean up potential markdown formatting code blocks returned by Gemini
+            if ai_text.startswith("```"):
+                ai_text = re.sub(r"^```[^\n]*\n", "", ai_text)
+                ai_text = re.sub(r"\n```$", "", ai_text)
+            return ai_text.strip()
+        else:
+            return f"Gemini API Error (Status {response.status_code}): {response.text}"
+    except Exception as e:
+        return f"Failed to harmonize chords via API: {e}"
+
+def generate_local_heuristic_chords(text, target_key):
+    """Mathematical local fallback to automatically overlay standard chord progressions."""
+    progression = ["C", "G", "Am", "F"] if ("C" in target_key or "Am" in target_key) else ["G", "D", "Em", "C"]
+    
+    lines = text.split("\n")
+    output = []
+    chord_idx = 0
+    for line in lines:
+        line_stripped = line.strip()
+        if not line_stripped:
+            output.append("")
+            continue
+        
+        # Check if line is already chords
+        chord_chars = set("abcdefg#m7susadd/123456789 ")
+        if set(line_stripped.lower()).issubset(chord_chars) and len(line_stripped) < 15:
+            output.append(line)
+            continue
+            
+        words = line_stripped.split()
+        if len(words) >= 4:
+            c1 = progression[chord_idx % 4]
+            chord_idx += 1
+            c2 = progression[chord_idx % 4]
+            chord_idx += 1
+            
+            # Estimate horizontal padding
+            space_len = max(len(line_stripped) // 2, 5)
+            chord_line = c1 + " " * space_len + c2
+        else:
+            c1 = progression[chord_idx % 4]
+            chord_idx += 1
+            chord_line = c1
+            
+        output.append(chord_line)
+        output.append(line)
+        
+    return "\n".join(output)
+
 # ----------------- DATABASE UTILITIES -----------------
 def get_db_connection():
     """Establishes connection, registers custom Arabic normalizer, and ensures table exists."""
     conn = sqlite3.connect(DB_NAME, timeout=30.0)
-    # Register our custom normalizer function with SQLite
     conn.create_function("normalize_arabic", 1, normalize_arabic)
     
     cursor = conn.cursor()
@@ -343,9 +421,9 @@ def get_image_path(image_path):
         return tmp_path
     return image_path
 
-# =========================================================
+# ==========================================
 # GLOBAL FULLSCREEN OVERLAY INJECTION (100% INSIDE THE APP)
-# =========================================================
+# ==========================================
 if "fullscreen_active" not in st.session_state:
     st.session_state["fullscreen_active"] = False
 
@@ -520,6 +598,66 @@ with tab_view:
                     height=250,
                     disabled=True
                 )
+                
+            # ----------------- INTERACTIVE CHORD GENERATOR -----------------
+            with st.expander("🎸 AI Chord Generator (Auto-Harmonize)", expanded=False):
+                st.write("Generate beautiful, aligned guitar/piano chords right above your hymn lyrics!")
+                
+                conn = get_db_connection()
+                row = conn.execute("SELECT extracted_text FROM hymns WHERE id=?", (hymn_id,)).fetchone()
+                conn.close()
+                raw_text = row[0] if (row and row[0]) else ""
+                
+                if not raw_text.strip():
+                    st.warning("This hymn has no extracted text or lyrics yet. Please ensure the OCR / import process has run successfully.")
+                else:
+                    chord_key = st.selectbox("Select Key Signature:", ["C Major", "G Major", "A Minor", "E Minor"])
+                    session_chord_key = f"generated_chords_{hymn_id}"
+                    
+                    if st.button("Generate Chords", type="primary"):
+                        if "GEMINI_API_KEY" in st.secrets:
+                            api_key = st.secrets["GEMINI_API_KEY"]
+                            with st.spinner("AI is analyzing lyrics and placing chords..."):
+                                chords_output = extract_ai_chords(raw_text, api_key, chord_key)
+                                st.session_state[session_chord_key] = chords_output
+                        else:
+                            with st.spinner("Generating local fallback chords... (Add GEMINI_API_KEY in secrets for professional chords!)"):
+                                chords_output = generate_local_heuristic_chords(raw_text, chord_key)
+                                st.session_state[session_chord_key] = chords_output
+                    
+                    # Display and Save logic
+                    if session_chord_key in st.session_state:
+                        generated_text = st.session_state[session_chord_key]
+                        st.markdown(
+                            f"<pre style='font-family: monospace; font-size: 16px; background-color: #fcfaf2; color: #2c2a29; border: 1px solid #dfdace; padding: 15px; border-radius: 8px; white-space: pre-wrap;'>{generated_text}</pre>", 
+                            unsafe_allow_html=True
+                        )
+                        
+                        if st.button("💾 Save Chords to Hymn"):
+                            with st.spinner("Saving and Syncing with GitHub..."):
+                                # Update locally
+                                conn = get_db_connection()
+                                conn.execute("UPDATE hymns SET extracted_text = ? WHERE id = ?", (generated_text, hymn_id))
+                                conn.commit()
+                                conn.close()
+                                
+                                # Push updated DB to Git
+                                if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+                                    token = st.secrets["GITHUB_TOKEN"]
+                                    repo = st.secrets["GITHUB_REPO"]
+                                    
+                                    with open(DB_NAME, "rb") as f:
+                                        db_bytes = f.read()
+                                    
+                                    success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Saved generated chords to '{title}'")
+                                    if success_db:
+                                        st.success("Chords successfully saved and synced permanently to GitHub!")
+                                        st.rerun()
+                                    else:
+                                        st.error("Saved locally, but failed to sync changes to GitHub.")
+                                else:
+                                    st.warning("Saved temporarily (GITHUB_TOKEN not configured in secrets).")
+                                    st.rerun()
         else:
             st.write("### Welcome to the Hymn Library")
             st.write("Select a hymn from the index on the left to display sheet music.")
