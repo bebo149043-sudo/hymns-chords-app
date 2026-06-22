@@ -403,14 +403,19 @@ with tab_view:
                     header {
                         display: none !important;
                     }
-                    /* Expand main container limits */
+                    /* Expand main container limits and remove margins */
                     div[data-testid="stAppViewBlockContainer"] {
                         max-width: 100% !important;
-                        padding: 1rem 2rem !important;
+                        padding: 0.5rem 1rem !important;
                     }
                     /* Hide non-active workspace tabs */
                     div[data-testid="stTabs"] [data-baseweb="tab-list"] {
                         display: none !important;
+                    }
+                    /* CHANGED: Forces the PDF viewframe to stretch vertically to fit the screen */
+                    .pdf-iframe {
+                        height: 92vh !important;
+                        width: 100% !important;
                     }
                     </style>
                 """, unsafe_allow_html=True)
@@ -426,8 +431,19 @@ with tab_view:
                 elif ext == '.pdf':
                     try:
                         with open(resolved_path, "rb") as f:
-                            base64_pdf = base64.b64encode(f.read()).decode('utf-8')
-                        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="900" type="application/pdf" style="border: none; border-radius: 8px;"></iframe>'
+                            pdf_bytes = f.read()
+                            base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+                        
+                        # CHANGED: Added direct Safari/iPadOS native PDF launcher
+                        st.download_button(
+                            label="📖 Open PDF in Native iPad/Tablet Viewer (For Smooth Scrolling & Apple Pencil)",
+                            data=pdf_bytes,
+                            file_name=f"{title}.pdf",
+                            mime="application/pdf"
+                        )
+                        
+                        # Render inside iframe with target CSS class 'pdf-iframe'
+                        pdf_display = f'<iframe class="pdf-iframe" src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800" type="application/pdf" style="border: none; border-radius: 8px;"></iframe>'
                         st.markdown(pdf_display, unsafe_allow_html=True)
                     except Exception as e:
                         st.error(f"Failed to display PDF: {e}")
@@ -446,7 +462,7 @@ with tab_view:
             else:
                 st.error(f"File not found on server: {resolved_path}")
             
-            # View Extracted Text Expander (Hidden in Focus Mode automatically if wrapped inside tab)
+            # View Extracted Text Expander
             with st.expander("🔍 View Extracted Text (Lyrics & Chords)", expanded=False):
                 conn = get_db_connection()
                 row = conn.execute("SELECT extracted_text FROM hymns WHERE id=?", (hymn_id,)).fetchone()
