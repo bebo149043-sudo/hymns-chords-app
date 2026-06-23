@@ -32,14 +32,6 @@ except ImportError:
 # Set page config
 st.set_page_config(page_title="Hymn Library", layout="wide", initial_sidebar_state="expanded")
 
-# ==========================================
-# FILE UPLOADER DYNAMIC STATE INITIALIZATION
-# ==========================================
-if "single_file_key" not in st.session_state:
-    st.session_state["single_file_key"] = "uploader_single_init"
-if "multi_file_key" not in st.session_state:
-    st.session_state["multi_file_key"] = "uploader_multi_init"
-
 # =========================================================
 # WARM IVORY & ACOUSTIC WOOD LIGHT-THEME STYLING
 # =========================================================
@@ -296,8 +288,14 @@ def normalize_arabic(text):
 # ----------------- INTELLECTUAL MUSIC CHORD ANALYZER -----------------
 def extract_ai_chords(lyrics, api_key, target_key):
     """Calls Google Gemini API to analyze lyrics and align high-quality chords [13]."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json"}
+    # FIXED: Swapped to the stable v1 endpoint
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
+    
+    # FIXED: API Key is now passed securely in the 'x-goog-api-key' header instead of the URL
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key
+    }
     
     prompt = (
         "You are an expert musician and worship leader. I will give you the lyrics of a Christian hymn (which may be in Arabic or English).\n"
