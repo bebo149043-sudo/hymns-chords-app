@@ -376,6 +376,7 @@ def generate_local_heuristic_chords(text, target_key):
 def get_db_connection():
     """Establishes connection, registers custom Arabic normalizer, and ensures table exists."""
     conn = sqlite3.connect(DB_NAME, timeout=30.0)
+    # Register our custom normalizer function with SQLite
     conn.create_function("normalize_arabic", 1, normalize_arabic)
     
     cursor = conn.cursor()
@@ -599,22 +600,65 @@ with tab_view:
                     disabled=True
                 )
                 
-            # ----------------- INTERACTIVE CHORD GENERATOR -----------------
+            # ----------------- EXPANDED MULTI-SOURCE CHORD GENERATOR -----------------
             with st.expander("🎸 AI Chord Generator (Auto-Harmonize)", expanded=False):
                 st.write("Generate beautiful, aligned guitar/piano chords right above your hymn lyrics!")
                 
-                conn = get_db_connection()
-                row = conn.execute("SELECT extracted_text FROM hymns WHERE id=?", (hymn_id,)).fetchone()
-                conn.close()
-                raw_text = row[0] if (row and row[0]) else ""
+                # Dynamic Lyrics Source Selection
+                source_mode = st.radio(
+                    "Select Lyrics Source:", 
+                    ["Use Active Hymn", "Paste / Write Lyrics", "Upload Lyrics File"], 
+                    horizontal=True,
+                    key="ai_lyrics_source_select"
+                )
                 
-                if not raw_text.strip():
-                    st.warning("This hymn has no extracted text or lyrics yet. Please ensure the OCR / import process has run successfully.")
-                else:
-                    chord_key = st.selectbox("Select Key Signature:", ["C Major", "G Major", "A Minor", "E Minor"])
-                    session_chord_key = f"generated_chords_{hymn_id}"
+                raw_text = ""
+                temp_title_placeholder = ""
+                
+                if source_mode == "Use Active Hymn":
+                    conn = get_db_connection()
+                    row = conn.execute("SELECT extracted_text FROM hymns WHERE id=?", (hymn_id,)).fetchone()
+                    conn.close()
+                    raw_text = row[0] if (row and row[0]) else ""
+                    temp_title_placeholder = title
+                    if not raw_text.strip():
+                        st.warning("This hymn has no extracted text or lyrics yet. Please choose another source option or make sure the OCR has run.")
+                        
+                elif source_mode == "Paste / Write Lyrics":
+                    raw_text = st.text_area("Paste or write your lyrics here:", height=200, placeholder="أكتب كلمات الترنيمة هنا...", key="ai_pasted_lyrics_box")
+                    temp_title_placeholder = "New Harmonized Hymn"
                     
-                    if st.button("Generate Chords", type="primary"):
+                elif source_mode == "Upload Lyrics File":
+                    ai_uploaded_file = st.file_uploader(
+                        "Upload a text, docx, or pdf file containing lyrics", 
+                        type=["txt", "docx", "pdf"], 
+                        key="ai_chord_file_uploader"
+                    )
+                    if ai_uploaded_file:
+                        file_bytes = ai_uploaded_file.getvalue()
+                        file_ext = os.path.splitext(ai_uploaded_file.name)[1].lower()
+                        temp_path = os.path.join("/tmp", f"ai_temp_{uuid.uuid4()}{file_ext}")
+                        
+                        with open(temp_path, "wb") as f:
+                            f.write(file_bytes)
+                        
+                        if file_ext == '.pdf':
+                            raw_text = extract_text_from_pdf(temp_path)
+                        elif file_ext == '.docx':
+                            raw_text = extract_text_from_docx(temp_path)
+                        elif file_ext == '.txt':
+                            raw_text = extract_text_from_txt(temp_path)
+                        
+                        temp_title_placeholder = get_title_from_filename(ai_uploaded_file.name)
+                        st.text_area("Extracted Lyrics Preview:", value=raw_text, height=150, disabled=True, key="ai_extracted_preview")
+
+                chord_key = st.selectbox("Select Key Signature:", ["C Major", "G Major", "A Minor", "E Minor"], key="ai_chord_key_select")
+                
+                # Session state keys configuration
+                session_chord_key = f"generated_chords_active" if source_mode != "Use Active Hymn" else f"generated_chords_{hymn_id}"
+                
+                if raw_text.strip():
+                    if st.button("Generate Chords", type="primary", key="ai_generate_chords_btn"):
                         if "GEMINI_API_KEY" in st.secrets:
                             api_key = st.secrets["GEMINI_API_KEY"]
                             with st.spinner("AI is analyzing lyrics and placing chords..."):
@@ -633,31 +677,84 @@ with tab_view:
                             unsafe_allow_html=True
                         )
                         
-                        if st.button("💾 Save Chords to Hymn"):
-                            with st.spinner("Saving and Syncing with GitHub..."):
-                                # Update locally
-                                conn = get_db_connection()
-                                conn.execute("UPDATE hymns SET extracted_text = ? WHERE id = ?", (generated_text, hymn_id))
-                                conn.commit()
-                                conn.close()
-                                
-                                # Push updated DB to Git
-                                if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
-                                    token = st.secrets["GITHUB_TOKEN"]
-                                    repo = st.secrets["GITHUB_REPO"]
+                        if source_mode == "Use Active Hymn":
+                            if st.button("💾 Save Chords to Active Hymn", key="save_to_active_btn"):
+                                with st.spinner("Saving and Syncing with GitHub..."):
+                                    # Update locally
+                                    conn = get_db_connection()
+                                    conn.execute("UPDATE hymns SET extracted_text = ? WHERE id = ?", (generated_text, hymn_id))
+                                    conn.commit()
+                                    conn.close()
                                     
-                                    with open(DB_NAME, "rb") as f:
-                                        db_bytes = f.read()
-                                    
-                                    success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Saved generated chords to '{title}'")
-                                    if success_db:
-                                        st.success("Chords successfully saved and synced permanently to GitHub!")
-                                        st.rerun()
+                                    # Push updated DB to Git
+                                    if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+                                        token = st.secrets["GITHUB_TOKEN"]
+                                        repo = st.secrets["GITHUB_REPO"]
+                                        with open(DB_NAME, "rb") as f:
+                                            db_bytes = f.read()
+                                        success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Saved generated chords to '{title}'")
+                                        if success_db:
+                                            st.success("Chords successfully saved and synced permanently to GitHub!")
+                                            st.rerun()
+                                        else:
+                                            st.error("Saved locally, but failed to sync changes to GitHub.")
                                     else:
-                                        st.error("Saved locally, but failed to sync changes to GitHub.")
+                                        st.warning("Saved temporarily (GITHUB_TOKEN not configured in secrets).")
+                                        st.rerun()
+                        else:
+                            # Save as a NEW hymn in the library
+                            st.write("---")
+                            st.subheader("💾 Save Chords as a New Hymn")
+                            new_hymn_title = st.text_input("Enter New Hymn Title:", value=temp_title_placeholder, key="new_hymn_title_input")
+                            
+                            if st.button("💾 Save as New Hymn", key="save_as_new_btn"):
+                                if not new_hymn_title.strip():
+                                    st.error("Please enter a valid title.")
                                 else:
-                                    st.warning("Saved temporarily (GITHUB_TOKEN not configured in secrets).")
-                                    st.rerun()
+                                    with st.spinner("Creating new hymn and syncing to GitHub..."):
+                                        # 1. Save chords as a .txt file inside /tmp
+                                        unique_name = f"{uuid.uuid4()}.txt"
+                                        temp_file_path = os.path.join("/tmp", unique_name)
+                                        with open(temp_file_path, "w", encoding="utf-8") as f:
+                                            f.write(generated_text)
+                                            
+                                        git_file_path = f"stored_hymns/{unique_name}"
+                                        
+                                        # 2. Insert to local DB
+                                        conn = get_db_connection()
+                                        cursor = conn.cursor()
+                                        cursor.execute(
+                                            'INSERT INTO hymns (title, image_path, extracted_text) VALUES (?, ?, ?)',
+                                            (new_hymn_title, git_file_path, generated_text)
+                                        )
+                                        conn.commit()
+                                        conn.close()
+                                        
+                                        # 3. Sync file and updated DB back to GitHub
+                                        if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+                                            token = st.secrets["GITHUB_TOKEN"]
+                                            repo = st.secrets["GITHUB_REPO"]
+                                            
+                                            with open(DB_NAME, "rb") as f:
+                                                db_bytes = f.read()
+                                            with open(temp_file_path, "rb") as f:
+                                                file_bytes = f.read()
+                                                
+                                            success_file = upload_to_github(token, repo, git_file_path, file_bytes, f"Uploaded new harmonized hymn text '{new_hymn_title}'")
+                                            success_db = upload_to_github(token, repo, REPO_DB, db_bytes, f"Updated database with '{new_hymn_title}'")
+                                            
+                                            if success_file and success_db:
+                                                st.success(f"Successfully saved and permanently synced '{new_hymn_title}' to your library!")
+                                                st.cache_data.clear()
+                                                st.rerun()
+                                            else:
+                                                st.error("Failed to sync to GitHub. Check your token permissions.")
+                                        else:
+                                            st.warning("Saved temporarily on server (no GITHUB_TOKEN configured).")
+                                            st.cache_data.clear()
+                                            st.rerun()
+                else:
+                    st.info("Please provide or upload some lyrics to generate chords.")
         else:
             st.write("### Welcome to the Hymn Library")
             st.write("Select a hymn from the index on the left to display sheet music.")
